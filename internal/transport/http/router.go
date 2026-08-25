@@ -10,10 +10,18 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	apiaryhttp "github.com/sbezhuk/beebase-apiary-service/internal/transport/http/apiary"
+	httpmw "github.com/sbezhuk/beebase-common/authmw"
 )
 
 // NewRouter builds the root HTTP handler for the service.
-func NewRouter(log *slog.Logger, db *pgxpool.Pool) http.Handler {
+func NewRouter(
+	log *slog.Logger,
+	db *pgxpool.Pool,
+	apiaryHandler *apiaryhttp.Handler,
+	tokenParser httpmw.AccessTokenParser,
+) http.Handler {
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -23,6 +31,16 @@ func NewRouter(log *slog.Logger, db *pgxpool.Pool) http.Handler {
 
 	r.Get("/health", HealthHandler)
 	r.Get("/ready", ReadyHandler(db))
+
+	r.Route("/api/v1/apiaries", func(r chi.Router) {
+		r.Use(httpmw.RequireAuth(tokenParser))
+
+		r.Post("/", apiaryHandler.Create)
+		r.Get("/", apiaryHandler.List)
+		r.Get("/{apiaryID}", apiaryHandler.Get)
+		r.Put("/{apiaryID}", apiaryHandler.Update)
+		r.Delete("/{apiaryID}", apiaryHandler.Delete)
+	})
 
 	return r
 }

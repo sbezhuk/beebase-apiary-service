@@ -1,0 +1,265 @@
+openapi: 3.0.3
+info:
+  title: BeeBase Apiary Service API
+  description: >
+    Apiary management service for BeeBase, an open-source backend for a
+    beekeeper management application split into microservices. Access
+    tokens are issued by auth-service (see its OpenAPI spec); this
+    service verifies them against auth-service's public key and never
+    trusts a userID from anywhere but a verified token.
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+
+tags:
+  - name: system
+    description: Liveness and readiness probes.
+  - name: apiaries
+    description: Create, read, update, and delete a user's own apiaries.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags: [system]
+      summary: Liveness probe
+      security: []
+      description: Always returns 200 while the process is running. Has no dependencies.
+      responses:
+        "200":
+          description: The process is alive.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /ready:
+    get:
+      tags: [system]
+      summary: Readiness probe
+      security: []
+      description: Returns 200 only if the database is reachable.
+      responses:
+        "200":
+          description: The service is ready to receive traffic.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+        "503":
+          description: A dependency (the database) is unreachable.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StatusResponse" }
+
+  /api/v1/apiaries:
+    post:
+      tags: [apiaries]
+      summary: Create an apiary
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApiaryRequest" }
+      responses:
+        "201":
+          description: Apiary created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiaryResponse" }
+        "400":
+          description: Request failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Missing, invalid, or expired access token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    get:
+      tags: [apiaries]
+      summary: List the authenticated user's apiaries
+      description: Returns only apiaries owned by the caller — never another user's.
+      responses:
+        "200":
+          description: The caller's apiaries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ApiaryResponse" }
+        "401":
+          description: Missing, invalid, or expired access token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/apiaries/{apiaryId}:
+    parameters:
+      - name: apiaryId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+
+    get:
+      tags: [apiaries]
+      summary: Get one of the authenticated user's apiaries
+      description: >
+        Returns 404 both when apiaryId doesn't exist and when it belongs
+        to a different user — the two cases are indistinguishable to the
+        caller, by design.
+      responses:
+        "200":
+          description: The apiary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiaryResponse" }
+        "400":
+          description: apiaryId is not a valid UUID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: Missing, invalid, or expired access token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: No such apiary, or it belongs to a different user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    put:
+      tags: [apiaries]
+      summary: Replace an apiary's editable fields
+      description: >
+        Full replacement (PUT semantics), not a partial patch: name,
+        location, and notes are all set from the request body.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ApiaryRequest" }
+      responses:
+        "200":
+          description: The updated apiary.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ApiaryResponse" }
+        "400":
+          description: apiaryId is not a valid UUID, or the request failed validation.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+        "401":
+          description: Missing, invalid, or expired access token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: No such apiary, or it belongs to a different user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+    delete:
+      tags: [apiaries]
+      summary: Delete an apiary
+      description: Soft delete — the row is retained (deleted_at is set) for future sync support.
+      responses:
+        "204":
+          description: The apiary is deleted (or already was).
+        "400":
+          description: apiaryId is not a valid UUID.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "401":
+          description: Missing, invalid, or expired access token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "404":
+          description: No such apiary, or it belongs to a different user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: An access token issued by auth-service's /api/v1/auth/login (or /register or /refresh).
+
+  schemas:
+    StatusResponse:
+      type: object
+      properties:
+        status: { type: string, example: ok }
+
+    ApiaryRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 200 }
+        location: { type: string, maxLength: 500 }
+        notes: { type: string, maxLength: 2000 }
+
+    ApiaryResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        location: { type: string }
+        notes: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ErrorResponse:
+      type: object
+      description: >
+        "code" is the stable, machine-readable key: build any localized
+        message off of it, not off "message" (an English fallback for logs
+        and manual debugging, not meant to be shown to end users).
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum:
+                - apiary_not_found
+                - invalid_apiary_id
+                - missing_authorization
+                - invalid_access_token
+                - invalid_body
+                - internal_error
+              example: apiary_not_found
+            message: { type: string, example: apiary not found }
+
+    ValidationErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string, enum: [validation_error] }
+            message: { type: string, example: request validation failed }
+            fields:
+              type: object
+              description: >
+                Field name to error code. Each value is a stable key (not a
+                human-readable message) meant to be localized client-side.
+              additionalProperties:
+                type: string
+                enum:
+                  - name_required
+                  - name_too_long
+                  - location_too_long
+                  - notes_too_long
+              example: { name: "name_required" }
