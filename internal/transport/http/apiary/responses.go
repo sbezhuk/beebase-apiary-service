@@ -10,22 +10,26 @@ import (
 
 // Response is the public representation of an apiary.
 type Response struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Location  string    `json:"location"`
-	Notes     string    `json:"notes"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Location    string    `json:"location"`
+	Description string    `json:"description"`
+	Lat         *float64  `json:"lat"`
+	Lon         *float64  `json:"lon"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 func newResponse(a *apiary.Apiary) Response {
 	return Response{
-		ID:        a.ID,
-		Name:      a.Name,
-		Location:  a.Location,
-		Notes:     a.Notes,
-		CreatedAt: a.CreatedAt,
-		UpdatedAt: a.UpdatedAt,
+		ID:          a.ID,
+		Name:        a.Name,
+		Location:    a.Location,
+		Description: a.Description,
+		Lat:         a.Lat,
+		Lon:         a.Lon,
+		CreatedAt:   a.CreatedAt,
+		UpdatedAt:   a.UpdatedAt,
 	}
 }
 

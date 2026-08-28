@@ -86,9 +86,9 @@ func TestCreate_Success(t *testing.T) {
 	userID := uuid.New()
 
 	a, err := svc.Create(context.Background(), userID, appapiary.CreateInput{
-		Name:     "Home apiary",
-		Location: "Backyard",
-		Notes:    "Two hives near the fence",
+		Name:        "Home apiary",
+		Location:    "Backyard",
+		Description: "Two hives near the fence",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -98,6 +98,40 @@ func TestCreate_Success(t *testing.T) {
 	}
 	if a.Name != "Home apiary" {
 		t.Errorf("Name = %q, want %q", a.Name, "Home apiary")
+	}
+}
+
+func TestCreate_WithCoordinates(t *testing.T) {
+	svc := appapiary.NewService(newFakeRepo())
+	userID := uuid.New()
+	lat, lon := 45.5, -122.6
+
+	a, err := svc.Create(context.Background(), userID, appapiary.CreateInput{
+		Name: "Home apiary",
+		Lat:  &lat,
+		Lon:  &lon,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if a.Lat == nil || *a.Lat != lat {
+		t.Errorf("Lat = %v, want %v", a.Lat, lat)
+	}
+	if a.Lon == nil || *a.Lon != lon {
+		t.Errorf("Lon = %v, want %v", a.Lon, lon)
+	}
+}
+
+func TestCreate_WithoutCoordinates(t *testing.T) {
+	svc := appapiary.NewService(newFakeRepo())
+	userID := uuid.New()
+
+	a, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Home apiary"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if a.Lat != nil || a.Lon != nil {
+		t.Errorf("Lat/Lon = %v/%v, want nil/nil", a.Lat, a.Lon)
 	}
 }
 
@@ -191,9 +225,9 @@ func TestUpdate_Success(t *testing.T) {
 	}
 
 	updated, err := svc.Update(context.Background(), userID, created.ID, appapiary.UpdateInput{
-		Name:     "New name",
-		Location: "New location",
-		Notes:    "New notes",
+		Name:        "New name",
+		Location:    "New location",
+		Description: "New description",
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)

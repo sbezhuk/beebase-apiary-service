@@ -35,7 +35,7 @@ func TestApiaryRepository_CreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID: %v", err)
 	}
-	if got.Name != a.Name || got.Location != a.Location || got.Notes != a.Notes {
+	if got.Name != a.Name || got.Location != a.Location || got.Description != a.Description {
 		t.Errorf("GetByID = %+v, want fields matching %+v", got, a)
 	}
 }
@@ -137,14 +137,14 @@ func TestApiaryRepository_Update(t *testing.T) {
 	repo := repopostgres.NewApiaryRepository(tx)
 	userID := uuid.New()
 
-	a := apiary.New(userID, "Old name", "Old location", "Old notes")
+	a := apiary.New(userID, "Old name", "Old location", "Old description")
 	if err := repo.Create(ctx, a); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
 	a.Name = "New name"
 	a.Location = "New location"
-	a.Notes = "New notes"
+	a.Description = "New description"
 	if err := repo.Update(ctx, a); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestApiaryRepository_Update(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByID after update: %v", err)
 	}
-	if got.Name != "New name" || got.Location != "New location" || got.Notes != "New notes" {
+	if got.Name != "New name" || got.Location != "New location" || got.Description != "New description" {
 		t.Errorf("GetByID after update = %+v, want updated fields", got)
 	}
 }

@@ -137,7 +137,7 @@ paths:
       summary: Replace an apiary's editable fields
       description: >
         Full replacement (PUT semantics), not a partial patch: name,
-        location, and notes are all set from the request body.
+        location, and description are all set from the request body.
       requestBody:
         required: true
         content:
@@ -208,7 +208,21 @@ components:
       properties:
         name: { type: string, maxLength: 200 }
         location: { type: string, maxLength: 500 }
-        notes: { type: string, maxLength: 2000 }
+        description: { type: string, maxLength: 2000 }
+        lat:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          nullable: true
+          description: Latitude of the apiary, in decimal degrees.
+        lon:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          nullable: true
+          description: Longitude of the apiary, in decimal degrees.
 
     ApiaryResponse:
       type: object
@@ -216,7 +230,9 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         location: { type: string }
-        notes: { type: string }
+        description: { type: string }
+        lat: { type: number, format: double, nullable: true }
+        lon: { type: number, format: double, nullable: true }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -261,5 +277,7 @@ components:
                   - name_required
                   - name_too_long
                   - location_too_long
-                  - notes_too_long
+                  - description_too_long
+                  - lat_out_of_range
+                  - lon_out_of_range
               example: { name: "name_required" }

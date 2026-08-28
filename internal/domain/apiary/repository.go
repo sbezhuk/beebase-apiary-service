@@ -16,7 +16,7 @@ type Repository interface {
 	Create(ctx context.Context, a *Apiary) error
 	GetByID(ctx context.Context, userID, apiaryID uuid.UUID) (*Apiary, error)
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]*Apiary, error)
-	// Update persists a.Name, a.Location, a.Notes, and a.UpdatedAt for the
+	// Update persists a.Name, a.Location, a.Description, and a.UpdatedAt for the
 	// apiary identified by a.ID, scoped to a.UserID.
 	Update(ctx context.Context, a *Apiary) error
 	// Delete soft-deletes the apiary (sets deleted_at) rather than

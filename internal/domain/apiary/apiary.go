@@ -14,11 +14,16 @@ import (
 // updated_at, deleted_at) per the project's offline-sync plan, even
 // though full sync isn't implemented yet.
 type Apiary struct {
-	ID        uuid.UUID
-	UserID    uuid.UUID
-	Name      string
-	Location  string
-	Notes     string
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	Name        string
+	Location    string
+	Description string
+	// Lat and Lon are the apiary's GPS coordinates. Both are optional
+	// (nil when not set) and independent of Location, which is a free-text
+	// description.
+	Lat       *float64
+	Lon       *float64
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time
@@ -26,15 +31,15 @@ type Apiary struct {
 
 // New constructs an Apiary owned by userID, with a freshly generated ID
 // and timestamps set to now.
-func New(userID uuid.UUID, name, location, notes string) *Apiary {
+func New(userID uuid.UUID, name, location, description string) *Apiary {
 	now := time.Now().UTC()
 	return &Apiary{
-		ID:        uuid.New(),
-		UserID:    userID,
-		Name:      name,
-		Location:  location,
-		Notes:     notes,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          uuid.New(),
+		UserID:      userID,
+		Name:        name,
+		Location:    location,
+		Description: description,
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 }

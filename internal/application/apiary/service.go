@@ -28,7 +28,9 @@ func NewService(apiaries apiary.Repository) *Service {
 
 // Create creates a new apiary owned by userID.
 func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) (*apiary.Apiary, error) {
-	a := apiary.New(userID, in.Name, in.Location, in.Notes)
+	a := apiary.New(userID, in.Name, in.Location, in.Description)
+	a.Lat = in.Lat
+	a.Lon = in.Lon
 	if err := s.apiaries.Create(ctx, a); err != nil {
 		return nil, fmt.Errorf("apiary: create: %w", err)
 	}
@@ -55,7 +57,9 @@ func (s *Service) Update(ctx context.Context, userID, apiaryID uuid.UUID, in Upd
 
 	a.Name = in.Name
 	a.Location = in.Location
-	a.Notes = in.Notes
+	a.Description = in.Description
+	a.Lat = in.Lat
+	a.Lon = in.Lon
 	a.UpdatedAt = time.Now().UTC()
 
 	if err := s.apiaries.Update(ctx, a); err != nil {

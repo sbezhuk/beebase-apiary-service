@@ -1,0 +1,3 @@
+ALTER TABLE apiaries
+    DROP COLUMN IF EXISTS lat,
+    DROP COLUMN IF EXISTS lon;

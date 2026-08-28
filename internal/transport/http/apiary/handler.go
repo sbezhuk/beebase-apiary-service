@@ -51,9 +51,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a, err := h.service.Create(r.Context(), userID, appapiary.CreateInput{
-		Name:     req.Name,
-		Location: req.Location,
-		Notes:    req.Notes,
+		Name:        req.Name,
+		Location:    req.Location,
+		Description: req.Description,
+		Lat:         req.Lat,
+		Lon:         req.Lon,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
@@ -118,9 +120,11 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a, err := h.service.Update(r.Context(), userID, apiaryID, appapiary.UpdateInput{
-		Name:     req.Name,
-		Location: req.Location,
-		Notes:    req.Notes,
+		Name:        req.Name,
+		Location:    req.Location,
+		Description: req.Description,
+		Lat:         req.Lat,
+		Lon:         req.Lon,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)

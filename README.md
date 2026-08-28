@@ -48,7 +48,7 @@ TOKEN=... # an access_token from auth-service's /api/v1/auth/register or /login
 
 curl -X POST http://localhost:8080/api/v1/apiaries \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Home apiary","location":"Backyard","notes":"two hives"}'
+  -d '{"name":"Home apiary","location":"Backyard","description":"two hives","lat":45.5,"lon":-122.6}'
 
 curl http://localhost:8080/api/v1/apiaries -H "Authorization: Bearer $TOKEN"
 ```

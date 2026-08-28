@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+func floatPtr(f float64) *float64 { return &f }
+
 func TestCreateRequest_Validate(t *testing.T) {
 	tests := []struct {
 		name string
@@ -13,7 +15,7 @@ func TestCreateRequest_Validate(t *testing.T) {
 	}{
 		{
 			name: "valid",
-			req:  CreateRequest{Name: "Home apiary", Location: "Backyard", Notes: "n/a"},
+			req:  CreateRequest{Name: "Home apiary", Location: "Backyard", Description: "n/a"},
 			want: map[string]string{},
 		},
 		{
@@ -37,14 +39,44 @@ func TestCreateRequest_Validate(t *testing.T) {
 			want: map[string]string{"location": CodeLocationTooLong},
 		},
 		{
-			name: "notes too long",
-			req:  CreateRequest{Name: "ok", Notes: strings.Repeat("a", maxNotesLength+1)},
-			want: map[string]string{"notes": CodeNotesTooLong},
+			name: "description too long",
+			req:  CreateRequest{Name: "ok", Description: strings.Repeat("a", maxDescriptionLength+1)},
+			want: map[string]string{"description": CodeDescriptionTooLong},
 		},
 		{
-			name: "location and notes optional",
+			name: "location and description optional",
 			req:  CreateRequest{Name: "ok"},
 			want: map[string]string{},
+		},
+		{
+			name: "lat and lon optional",
+			req:  CreateRequest{Name: "ok"},
+			want: map[string]string{},
+		},
+		{
+			name: "valid coordinates",
+			req:  CreateRequest{Name: "ok", Lat: floatPtr(45.5), Lon: floatPtr(-122.6)},
+			want: map[string]string{},
+		},
+		{
+			name: "lat out of range",
+			req:  CreateRequest{Name: "ok", Lat: floatPtr(90.1)},
+			want: map[string]string{"lat": CodeLatOutOfRange},
+		},
+		{
+			name: "lat below range",
+			req:  CreateRequest{Name: "ok", Lat: floatPtr(-90.1)},
+			want: map[string]string{"lat": CodeLatOutOfRange},
+		},
+		{
+			name: "lon out of range",
+			req:  CreateRequest{Name: "ok", Lon: floatPtr(180.1)},
+			want: map[string]string{"lon": CodeLonOutOfRange},
+		},
+		{
+			name: "lon below range",
+			req:  CreateRequest{Name: "ok", Lon: floatPtr(-180.1)},
+			want: map[string]string{"lon": CodeLonOutOfRange},
 		},
 	}
 

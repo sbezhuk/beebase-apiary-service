@@ -9,19 +9,26 @@ import (
 )
 
 const (
-	maxNameLength     = 200
-	maxLocationLength = 500
-	maxNotesLength    = 2000
+	maxNameLength        = 200
+	maxLocationLength    = 500
+	maxDescriptionLength = 2000
+
+	minLat = -90
+	maxLat = 90
+	minLon = -180
+	maxLon = 180
 )
 
 // Field validation error codes. Each is a stable key a client can map to a
 // localized message; the field carrying no error is simply absent from the
 // response's "fields" map.
 const (
-	CodeNameRequired    = "name_required"
-	CodeNameTooLong     = "name_too_long"
-	CodeLocationTooLong = "location_too_long"
-	CodeNotesTooLong    = "notes_too_long"
+	CodeNameRequired       = "name_required"
+	CodeNameTooLong        = "name_too_long"
+	CodeLocationTooLong    = "location_too_long"
+	CodeDescriptionTooLong = "description_too_long"
+	CodeLatOutOfRange      = "lat_out_of_range"
+	CodeLonOutOfRange      = "lon_out_of_range"
 )
 
 // validatable is implemented by every request DTO in this package.
@@ -51,29 +58,33 @@ func decodeAndValidate(w http.ResponseWriter, r *http.Request, dst validatable) 
 
 // CreateRequest is the body of POST /apiaries.
 type CreateRequest struct {
-	Name     string `json:"name"`
-	Location string `json:"location"`
-	Notes    string `json:"notes"`
+	Name        string   `json:"name"`
+	Location    string   `json:"location"`
+	Description string   `json:"description"`
+	Lat         *float64 `json:"lat"`
+	Lon         *float64 `json:"lon"`
 }
 
 func (r *CreateRequest) Validate() map[string]string {
-	return validateFields(r.Name, r.Location, r.Notes)
+	return validateFields(r.Name, r.Location, r.Description, r.Lat, r.Lon)
 }
 
 // UpdateRequest is the body of PUT /apiaries/{apiaryID}. Update replaces
-// all three fields (PUT semantics), not a partial patch, so the same
-// rules apply as on create.
+// all fields (PUT semantics), not a partial patch, so the same rules apply
+// as on create.
 type UpdateRequest struct {
-	Name     string `json:"name"`
-	Location string `json:"location"`
-	Notes    string `json:"notes"`
+	Name        string   `json:"name"`
+	Location    string   `json:"location"`
+	Description string   `json:"description"`
+	Lat         *float64 `json:"lat"`
+	Lon         *float64 `json:"lon"`
 }
 
 func (r *UpdateRequest) Validate() map[string]string {
-	return validateFields(r.Name, r.Location, r.Notes)
+	return validateFields(r.Name, r.Location, r.Description, r.Lat, r.Lon)
 }
 
-func validateFields(name, location, notes string) map[string]string {
+func validateFields(name, location, description string, lat, lon *float64) map[string]string {
 	fields := map[string]string{}
 
 	switch {
@@ -86,8 +97,15 @@ func validateFields(name, location, notes string) map[string]string {
 	if len(location) > maxLocationLength {
 		fields["location"] = CodeLocationTooLong
 	}
-	if len(notes) > maxNotesLength {
-		fields["notes"] = CodeNotesTooLong
+	if len(description) > maxDescriptionLength {
+		fields["description"] = CodeDescriptionTooLong
+	}
+
+	if lat != nil && (*lat < minLat || *lat > maxLat) {
+		fields["lat"] = CodeLatOutOfRange
+	}
+	if lon != nil && (*lon < minLon || *lon > maxLon) {
+		fields["lon"] = CodeLonOutOfRange
 	}
 
 	return fields

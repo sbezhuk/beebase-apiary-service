@@ -26,11 +26,11 @@ func NewApiaryRepository(db Querier) *ApiaryRepository {
 
 func (r *ApiaryRepository) Create(ctx context.Context, a *apiary.Apiary) error {
 	const q = `
-		INSERT INTO apiaries (id, user_id, name, location, notes, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		INSERT INTO apiaries (id, user_id, name, location, description, lat, lon, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
-	_, err := r.db.Exec(ctx, q, a.ID, a.UserID, a.Name, a.Location, a.Notes, a.CreatedAt, a.UpdatedAt)
+	_, err := r.db.Exec(ctx, q, a.ID, a.UserID, a.Name, a.Location, a.Description, a.Lat, a.Lon, a.CreatedAt, a.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("postgres: create apiary: %w", err)
 	}
@@ -40,7 +40,7 @@ func (r *ApiaryRepository) Create(ctx context.Context, a *apiary.Apiary) error {
 
 func (r *ApiaryRepository) GetByID(ctx context.Context, userID, apiaryID uuid.UUID) (*apiary.Apiary, error) {
 	const q = `
-		SELECT id, user_id, name, location, notes, created_at, updated_at, deleted_at
+		SELECT id, user_id, name, location, description, lat, lon, created_at, updated_at, deleted_at
 		FROM apiaries
 		WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
 	`
@@ -48,7 +48,7 @@ func (r *ApiaryRepository) GetByID(ctx context.Context, userID, apiaryID uuid.UU
 	var a apiary.Apiary
 
 	err := r.db.QueryRow(ctx, q, apiaryID, userID).Scan(
-		&a.ID, &a.UserID, &a.Name, &a.Location, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &a.DeletedAt,
+		&a.ID, &a.UserID, &a.Name, &a.Location, &a.Description, &a.Lat, &a.Lon, &a.CreatedAt, &a.UpdatedAt, &a.DeletedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -62,7 +62,7 @@ func (r *ApiaryRepository) GetByID(ctx context.Context, userID, apiaryID uuid.UU
 
 func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]*apiary.Apiary, error) {
 	const q = `
-		SELECT id, user_id, name, location, notes, created_at, updated_at, deleted_at
+		SELECT id, user_id, name, location, description, lat, lon, created_at, updated_at, deleted_at
 		FROM apiaries
 		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at ASC
@@ -77,7 +77,7 @@ func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]
 	apiaries := []*apiary.Apiary{}
 	for rows.Next() {
 		var a apiary.Apiary
-		if err := rows.Scan(&a.ID, &a.UserID, &a.Name, &a.Location, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &a.DeletedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Name, &a.Location, &a.Description, &a.Lat, &a.Lon, &a.CreatedAt, &a.UpdatedAt, &a.DeletedAt); err != nil {
 			return nil, fmt.Errorf("postgres: scan apiary: %w", err)
 		}
 		apiaries = append(apiaries, &a)
@@ -92,11 +92,11 @@ func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]
 func (r *ApiaryRepository) Update(ctx context.Context, a *apiary.Apiary) error {
 	const q = `
 		UPDATE apiaries
-		SET name = $1, location = $2, notes = $3, updated_at = $4
-		WHERE id = $5 AND user_id = $6 AND deleted_at IS NULL
+		SET name = $1, location = $2, description = $3, lat = $4, lon = $5, updated_at = $6
+		WHERE id = $7 AND user_id = $8 AND deleted_at IS NULL
 	`
 
-	tag, err := r.db.Exec(ctx, q, a.Name, a.Location, a.Notes, a.UpdatedAt, a.ID, a.UserID)
+	tag, err := r.db.Exec(ctx, q, a.Name, a.Location, a.Description, a.Lat, a.Lon, a.UpdatedAt, a.ID, a.UserID)
 	if err != nil {
 		return fmt.Errorf("postgres: update apiary: %w", err)
 	}

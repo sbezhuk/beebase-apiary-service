@@ -155,9 +155,9 @@ func TestApiaryFlow_CreateGetListUpdateDelete(t *testing.T) {
 
 	// Create
 	resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{
-		"name":     "Home apiary",
-		"location": "Backyard",
-		"notes":    "two hives",
+		"name":        "Home apiary",
+		"location":    "Backyard",
+		"description": "two hives",
 	})
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create: status = %d, want %d", resp.StatusCode, http.StatusCreated)
@@ -192,9 +192,9 @@ func TestApiaryFlow_CreateGetListUpdateDelete(t *testing.T) {
 
 	// Update
 	resp = stack.request(t, http.MethodPut, "/api/v1/apiaries/"+created.ID.String(), token, map[string]string{
-		"name":     "Renamed apiary",
-		"location": "Front yard",
-		"notes":    "moved",
+		"name":        "Renamed apiary",
+		"location":    "Front yard",
+		"description": "moved",
 	})
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("update: status = %d, want %d", resp.StatusCode, http.StatusOK)
