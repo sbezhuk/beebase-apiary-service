@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sbezhuk/beebase-apiary-service/internal/domain/apiary"
+	"github.com/sbezhuk/beebase-common/pagination"
 )
 
 // Service implements the apiary use cases. Every method takes the
@@ -42,9 +43,10 @@ func (s *Service) Get(ctx context.Context, userID, apiaryID uuid.UUID) (*apiary.
 	return s.apiaries.GetByID(ctx, userID, apiaryID)
 }
 
-// List returns every apiary belonging to userID.
-func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]*apiary.Apiary, error) {
-	return s.apiaries.ListByUser(ctx, userID)
+// List returns the page of apiaries described by p, out of every apiary
+// belonging to userID.
+func (s *Service) List(ctx context.Context, userID uuid.UUID, p pagination.Params) ([]*apiary.Apiary, int, error) {
+	return s.apiaries.ListByUser(ctx, userID, p)
 }
 
 // Update replaces the editable fields of the apiary identified by

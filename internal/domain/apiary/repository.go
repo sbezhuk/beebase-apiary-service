@@ -4,6 +4,8 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+
+	"github.com/sbezhuk/beebase-common/pagination"
 )
 
 // Repository is the port through which the application persists and
@@ -15,7 +17,10 @@ import (
 type Repository interface {
 	Create(ctx context.Context, a *Apiary) error
 	GetByID(ctx context.Context, userID, apiaryID uuid.UUID) (*Apiary, error)
-	ListByUser(ctx context.Context, userID uuid.UUID) ([]*Apiary, error)
+	// ListByUser returns the page of apiaries described by p, along with
+	// the total number of apiaries userID owns (independent of p, for
+	// computing pagination metadata).
+	ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params) (apiaries []*Apiary, total int, err error)
 	// Update persists a.Name, a.Location, a.Description, and a.UpdatedAt for the
 	// apiary identified by a.ID, scoped to a.UserID.
 	Update(ctx context.Context, a *Apiary) error

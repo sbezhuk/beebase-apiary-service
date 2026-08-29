@@ -17,6 +17,7 @@ import (
 	"github.com/sbezhuk/beebase-apiary-service/internal/domain/apiary"
 	httpmw "github.com/sbezhuk/beebase-common/authmw"
 	"github.com/sbezhuk/beebase-common/httpx"
+	"github.com/sbezhuk/beebase-common/pagination"
 )
 
 // Error codes for apiary failures, returned as the top-level "error.code".
@@ -72,13 +73,19 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	apiaries, err := h.service.List(r.Context(), userID)
+	p, fields := pagination.ParseParams(r)
+	if len(fields) > 0 {
+		httpx.WriteValidationError(w, fields)
+		return
+	}
+
+	apiaries, total, err := h.service.List(r.Context(), userID, p)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, newListResponse(apiaries))
+	httpx.WriteJSON(w, http.StatusOK, pagination.NewResponse(newListResponse(apiaries), p, total))
 }
 
 // Get handles GET /apiaries/{apiaryID}.

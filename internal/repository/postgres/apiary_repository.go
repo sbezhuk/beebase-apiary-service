@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/sbezhuk/beebase-apiary-service/internal/domain/apiary"
+	"github.com/sbezhuk/beebase-common/pagination"
 )
 
 // ApiaryRepository implements domain/apiary.Repository against
@@ -60,17 +61,29 @@ func (r *ApiaryRepository) GetByID(ctx context.Context, userID, apiaryID uuid.UU
 	return &a, nil
 }
 
-func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]*apiary.Apiary, error) {
+func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params) ([]*apiary.Apiary, int, error) {
+	const countQ = `
+		SELECT count(*)
+		FROM apiaries
+		WHERE user_id = $1 AND deleted_at IS NULL
+	`
+
+	var total int
+	if err := r.db.QueryRow(ctx, countQ, userID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("postgres: count apiaries: %w", err)
+	}
+
 	const q = `
 		SELECT id, user_id, name, location, description, lat, lon, created_at, updated_at, deleted_at
 		FROM apiaries
 		WHERE user_id = $1 AND deleted_at IS NULL
-		ORDER BY created_at ASC
+		ORDER BY created_at ASC, id ASC
+		LIMIT $2 OFFSET $3
 	`
 
-	rows, err := r.db.Query(ctx, q, userID)
+	rows, err := r.db.Query(ctx, q, userID, p.Limit, p.Offset())
 	if err != nil {
-		return nil, fmt.Errorf("postgres: list apiaries: %w", err)
+		return nil, 0, fmt.Errorf("postgres: list apiaries: %w", err)
 	}
 	defer rows.Close()
 
@@ -78,15 +91,15 @@ func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]
 	for rows.Next() {
 		var a apiary.Apiary
 		if err := rows.Scan(&a.ID, &a.UserID, &a.Name, &a.Location, &a.Description, &a.Lat, &a.Lon, &a.CreatedAt, &a.UpdatedAt, &a.DeletedAt); err != nil {
-			return nil, fmt.Errorf("postgres: scan apiary: %w", err)
+			return nil, 0, fmt.Errorf("postgres: scan apiary: %w", err)
 		}
 		apiaries = append(apiaries, &a)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("postgres: list apiaries: %w", err)
+		return nil, 0, fmt.Errorf("postgres: list apiaries: %w", err)
 	}
 
-	return apiaries, nil
+	return apiaries, total, nil
 }
 
 func (r *ApiaryRepository) Update(ctx context.Context, a *apiary.Apiary) error {

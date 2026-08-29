@@ -3,6 +3,7 @@ package apiary_test
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 
 	appapiary "github.com/sbezhuk/beebase-apiary-service/internal/application/apiary"
 	"github.com/sbezhuk/beebase-apiary-service/internal/domain/apiary"
+	"github.com/sbezhuk/beebase-common/pagination"
 )
 
 // --- in-memory fake for the domain port ---
@@ -42,17 +44,34 @@ func (f *fakeRepo) GetByID(_ context.Context, userID, apiaryID uuid.UUID) (*apia
 	return &cp, nil
 }
 
-func (f *fakeRepo) ListByUser(_ context.Context, userID uuid.UUID) ([]*apiary.Apiary, error) {
+func (f *fakeRepo) ListByUser(_ context.Context, userID uuid.UUID, p pagination.Params) ([]*apiary.Apiary, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	var out []*apiary.Apiary
+	var all []*apiary.Apiary
 	for _, a := range f.byID {
 		if a.UserID == userID && a.DeletedAt == nil {
 			cp := *a
-			out = append(out, &cp)
+			all = append(all, &cp)
 		}
 	}
-	return out, nil
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].CreatedAt.Before(all[j].CreatedAt)
+		}
+		return all[i].ID.String() < all[j].ID.String()
+	})
+
+	total := len(all)
+	start := p.Offset()
+	if start > total {
+		start = total
+	}
+	end := start + p.Limit
+	if end > total {
+		end = total
+	}
+
+	return all[start:end], total, nil
 }
 
 func (f *fakeRepo) Update(_ context.Context, a *apiary.Apiary) error {
@@ -200,9 +219,12 @@ func TestList_ReturnsOnlyOwnApiaries(t *testing.T) {
 		t.Fatalf("Create B1: %v", err)
 	}
 
-	list, err := svc.List(context.Background(), userA)
+	list, total, err := svc.List(context.Background(), userA, pagination.Params{Page: 1, Limit: pagination.DefaultLimit})
 	if err != nil {
 		t.Fatalf("List: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("List total = %d, want 2", total)
 	}
 	if len(list) != 2 {
 		t.Fatalf("List returned %d apiaries, want 2", len(list))
@@ -211,6 +233,66 @@ func TestList_ReturnsOnlyOwnApiaries(t *testing.T) {
 		if a.UserID != userA {
 			t.Errorf("List leaked apiary %s owned by %s into userA's list", a.ID, a.UserID)
 		}
+	}
+}
+
+func TestList_Pagination(t *testing.T) {
+	repo := newFakeRepo()
+	svc := appapiary.NewService(repo)
+	userID := uuid.New()
+
+	for i := 0; i < 5; i++ {
+		if _, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "A"}); err != nil {
+			t.Fatalf("Create: %v", err)
+		}
+	}
+
+	firstPage, total, err := svc.List(context.Background(), userID, pagination.Params{Page: 1, Limit: 2})
+	if err != nil {
+		t.Fatalf("List page 1: %v", err)
+	}
+	if total != 5 {
+		t.Fatalf("total = %d, want 5", total)
+	}
+	if len(firstPage) != 2 {
+		t.Fatalf("page 1 returned %d apiaries, want 2", len(firstPage))
+	}
+
+	lastPage, total, err := svc.List(context.Background(), userID, pagination.Params{Page: 3, Limit: 2})
+	if err != nil {
+		t.Fatalf("List page 3: %v", err)
+	}
+	if total != 5 {
+		t.Fatalf("total = %d, want 5", total)
+	}
+	if len(lastPage) != 1 {
+		t.Fatalf("page 3 returned %d apiaries, want 1", len(lastPage))
+	}
+
+	beyond, total, err := svc.List(context.Background(), userID, pagination.Params{Page: 10, Limit: 2})
+	if err != nil {
+		t.Fatalf("List page 10: %v", err)
+	}
+	if total != 5 {
+		t.Fatalf("total = %d, want 5", total)
+	}
+	if len(beyond) != 0 {
+		t.Fatalf("page beyond available data returned %d apiaries, want 0", len(beyond))
+	}
+}
+
+func TestList_Empty(t *testing.T) {
+	svc := appapiary.NewService(newFakeRepo())
+
+	list, total, err := svc.List(context.Background(), uuid.New(), pagination.Params{Page: 1, Limit: pagination.DefaultLimit})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 0 {
+		t.Fatalf("total = %d, want 0", total)
+	}
+	if len(list) != 0 {
+		t.Fatalf("List = %v, want empty", list)
 	}
 }
 

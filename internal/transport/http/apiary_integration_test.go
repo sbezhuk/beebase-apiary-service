@@ -25,6 +25,7 @@ import (
 	"github.com/sbezhuk/beebase-common/authmw"
 	"github.com/sbezhuk/beebase-common/jwks"
 	"github.com/sbezhuk/beebase-common/logger"
+	"github.com/sbezhuk/beebase-common/pagination"
 )
 
 const testKID = "test-kid"
@@ -184,10 +185,13 @@ func TestApiaryFlow_CreateGetListUpdateDelete(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list: status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
-	var list []apiaryhttp.Response
+	var list pagination.Response[apiaryhttp.Response]
 	decodeJSON(t, resp, &list)
-	if len(list) != 1 {
-		t.Fatalf("list: got %d apiaries, want 1", len(list))
+	if len(list.Items) != 1 {
+		t.Fatalf("list: got %d apiaries, want 1", len(list.Items))
+	}
+	if list.Pagination.Total != 1 || list.Pagination.Page != 1 || list.Pagination.Limit != pagination.DefaultLimit {
+		t.Fatalf("list: pagination = %+v, want total=1 page=1 limit=%d", list.Pagination, pagination.DefaultLimit)
 	}
 
 	// Update
@@ -258,10 +262,13 @@ func TestApiaryFlow_CannotAccessAnotherUsersApiary(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list: status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
-	var list []apiaryhttp.Response
+	var list pagination.Response[apiaryhttp.Response]
 	decodeJSON(t, resp, &list)
-	if len(list) != 0 {
-		t.Fatalf("other user's list = %v, want empty", list)
+	if len(list.Items) != 0 {
+		t.Fatalf("other user's list = %v, want empty", list.Items)
+	}
+	if list.Pagination.Total != 0 {
+		t.Fatalf("other user's list total = %d, want 0", list.Pagination.Total)
 	}
 
 	// The owner must still be able to see it: the failed attempts above
@@ -303,5 +310,51 @@ func TestApiaryFlow_InvalidApiaryID(t *testing.T) {
 	resp := stack.request(t, http.MethodGet, "/api/v1/apiaries/not-a-uuid", token, nil)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("get with malformed id: status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestApiaryFlow_ListPagination(t *testing.T) {
+	stack := newTestStack(t)
+	userID := uuid.New()
+	token := stack.tokenFor(t, userID)
+
+	for i := 0; i < 3; i++ {
+		resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{"name": "A"})
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create %d: status = %d, want %d", i, resp.StatusCode, http.StatusCreated)
+		}
+	}
+
+	resp := stack.request(t, http.MethodGet, "/api/v1/apiaries?page=1&limit=2", token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	var page pagination.Response[apiaryhttp.Response]
+	decodeJSON(t, resp, &page)
+	if len(page.Items) != 2 {
+		t.Fatalf("list page 1: got %d items, want 2", len(page.Items))
+	}
+	if page.Pagination.Total != 3 || page.Pagination.TotalPages != 2 || !page.Pagination.HasNext || page.Pagination.HasPrevious {
+		t.Fatalf("list page 1: pagination = %+v, want total=3 total_pages=2 has_next=true has_previous=false", page.Pagination)
+	}
+}
+
+func TestApiaryFlow_ListInvalidPageAndLimit(t *testing.T) {
+	stack := newTestStack(t)
+	token := stack.tokenFor(t, uuid.New())
+
+	cases := []string{
+		"/api/v1/apiaries?page=0",
+		"/api/v1/apiaries?page=-1",
+		"/api/v1/apiaries?page=abc",
+		"/api/v1/apiaries?limit=0",
+		"/api/v1/apiaries?limit=101",
+		"/api/v1/apiaries?limit=abc",
+	}
+	for _, path := range cases {
+		resp := stack.request(t, http.MethodGet, path, token, nil)
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET %s: status = %d, want %d", path, resp.StatusCode, http.StatusBadRequest)
+		}
 	}
 }

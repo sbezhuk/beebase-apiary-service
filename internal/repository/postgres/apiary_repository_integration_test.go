@@ -6,11 +6,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/sbezhuk/beebase-apiary-service/internal/domain/apiary"
 	repopostgres "github.com/sbezhuk/beebase-apiary-service/internal/repository/postgres"
+	"github.com/sbezhuk/beebase-common/pagination"
 )
 
 func TestApiaryRepository_CreateAndGet(t *testing.T) {
@@ -110,9 +112,12 @@ func TestApiaryRepository_ListByUser_OnlyOwnApiaries(t *testing.T) {
 		t.Fatalf("create B1: %v", err)
 	}
 
-	list, err := repo.ListByUser(ctx, userA)
+	list, total, err := repo.ListByUser(ctx, userA, pagination.Params{Page: 1, Limit: pagination.DefaultLimit})
 	if err != nil {
 		t.Fatalf("ListByUser: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("ListByUser total = %d, want 2", total)
 	}
 	if len(list) != 2 {
 		t.Fatalf("ListByUser returned %d apiaries, want 2", len(list))
@@ -120,6 +125,160 @@ func TestApiaryRepository_ListByUser_OnlyOwnApiaries(t *testing.T) {
 	for _, a := range list {
 		if a.UserID != userA {
 			t.Errorf("ListByUser leaked apiary %s owned by %s", a.ID, a.UserID)
+		}
+	}
+}
+
+func TestApiaryRepository_ListByUser_Pagination(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewApiaryRepository(tx)
+	userID := uuid.New()
+
+	const count = 5
+	for i := 0; i < count; i++ {
+		if err := repo.Create(ctx, apiary.New(userID, "A", "", "")); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+	}
+
+	// First page.
+	first, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListByUser page 1: %v", err)
+	}
+	if total != count {
+		t.Fatalf("total = %d, want %d", total, count)
+	}
+	if len(first) != 2 {
+		t.Fatalf("page 1 returned %d apiaries, want 2", len(first))
+	}
+
+	// Middle page.
+	middle, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 2, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListByUser page 2: %v", err)
+	}
+	if total != count {
+		t.Fatalf("total = %d, want %d", total, count)
+	}
+	if len(middle) != 2 {
+		t.Fatalf("page 2 returned %d apiaries, want 2", len(middle))
+	}
+
+	// Last (partial) page.
+	last, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 3, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListByUser page 3: %v", err)
+	}
+	if total != count {
+		t.Fatalf("total = %d, want %d", total, count)
+	}
+	if len(last) != 1 {
+		t.Fatalf("page 3 returned %d apiaries, want 1", len(last))
+	}
+
+	// Page beyond available data.
+	beyond, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 10, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListByUser page 10: %v", err)
+	}
+	if total != count {
+		t.Fatalf("total = %d, want %d", total, count)
+	}
+	if len(beyond) != 0 {
+		t.Fatalf("page beyond available data returned %d apiaries, want 0", len(beyond))
+	}
+
+	// Pages must not overlap and together must cover every row exactly once.
+	seen := map[uuid.UUID]bool{}
+	for _, a := range append(append(first, middle...), last...) {
+		if seen[a.ID] {
+			t.Errorf("apiary %s appeared on more than one page", a.ID)
+		}
+		seen[a.ID] = true
+	}
+	if len(seen) != count {
+		t.Errorf("pages together covered %d apiaries, want %d", len(seen), count)
+	}
+}
+
+func TestApiaryRepository_ListByUser_Empty(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewApiaryRepository(tx)
+
+	list, total, err := repo.ListByUser(ctx, uuid.New(), pagination.Params{Page: 1, Limit: pagination.DefaultLimit})
+	if err != nil {
+		t.Fatalf("ListByUser: %v", err)
+	}
+	if total != 0 {
+		t.Fatalf("total = %d, want 0", total)
+	}
+	if len(list) != 0 {
+		t.Fatalf("ListByUser = %v, want empty", list)
+	}
+}
+
+// TestApiaryRepository_ListByUser_StableOrdering guards against equal
+// created_at timestamps reshuffling rows between pages: the id tiebreaker
+// must make ordering deterministic even when many apiaries share a
+// timestamp (a real possibility, since created_at defaults from the same
+// batch insert).
+func TestApiaryRepository_ListByUser_StableOrdering(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewApiaryRepository(tx)
+	userID := uuid.New()
+
+	now := time.Now().UTC()
+	ids := make([]uuid.UUID, 4)
+	for i := range ids {
+		a := apiary.New(userID, "A", "", "")
+		a.CreatedAt = now
+		a.UpdatedAt = now
+		if err := repo.Create(ctx, a); err != nil {
+			t.Fatalf("create %d: %v", i, err)
+		}
+		ids[i] = a.ID
+	}
+
+	firstRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4})
+	if err != nil {
+		t.Fatalf("ListByUser run 1: %v", err)
+	}
+	secondRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4})
+	if err != nil {
+		t.Fatalf("ListByUser run 2: %v", err)
+	}
+
+	if len(firstRun) != len(secondRun) {
+		t.Fatalf("run lengths differ: %d vs %d", len(firstRun), len(secondRun))
+	}
+	for i := range firstRun {
+		if firstRun[i].ID != secondRun[i].ID {
+			t.Fatalf("ordering unstable at index %d: %s vs %s", i, firstRun[i].ID, secondRun[i].ID)
 		}
 	}
 }
