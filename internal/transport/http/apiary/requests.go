@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/sbezhuk/beebase-common/httpx"
 )
 
@@ -29,6 +31,7 @@ const (
 	CodeDescriptionTooLong = "description_too_long"
 	CodeLatOutOfRange      = "lat_out_of_range"
 	CodeLonOutOfRange      = "lon_out_of_range"
+	CodeImagesInvalid      = "images_invalid"
 )
 
 // validatable is implemented by every request DTO in this package.
@@ -78,10 +81,26 @@ type UpdateRequest struct {
 	Description string   `json:"description"`
 	Lat         *float64 `json:"lat"`
 	Lon         *float64 `json:"lon"`
+	// Images, when present (even as an empty array), is the desired
+	// final set of already-uploaded media IDs attached to this apiary;
+	// omitting the field (or sending JSON null) leaves currently
+	// attached media untouched. Go's json package already distinguishes
+	// "absent/null" (nil slice) from "[]" (non-nil, empty slice), which
+	// is exactly the distinction this needs.
+	Images []string `json:"images"`
 }
 
 func (r *UpdateRequest) Validate() map[string]string {
-	return validateFields(r.Name, r.Location, r.Description, r.Lat, r.Lon)
+	fields := validateFields(r.Name, r.Location, r.Description, r.Lat, r.Lon)
+
+	for _, id := range r.Images {
+		if _, err := uuid.Parse(id); err != nil {
+			fields["images"] = CodeImagesInvalid
+			break
+		}
+	}
+
+	return fields
 }
 
 func validateFields(name, location, description string, lat, lon *float64) map[string]string {

@@ -138,19 +138,32 @@ func (f *fakeHiveDeleter) wasDeleted(apiaryID uuid.UUID) bool {
 	return false
 }
 
-// fakeMediaDeleter is the media-service equivalent of fakeHiveDeleter.
+// fakeMediaDeleter is the media-service equivalent of fakeHiveDeleter. It
+// also stands in for the rest of application/apiary.MediaClient: attached
+// tracks which media IDs are attached to which apiary, seeded via
+// attach(), so tests can exercise Update's images reconciliation without
+// a real media-service.
 type fakeMediaDeleter struct {
-	mu      sync.Mutex
-	deleted []uuid.UUID
-	failFor map[uuid.UUID]error
+	mu       sync.Mutex
+	deleted  []uuid.UUID
+	failFor  map[uuid.UUID]error
+	attached map[uuid.UUID]uuid.UUID // mediaID -> apiaryID
 }
 
 func newFakeMediaDeleter() *fakeMediaDeleter {
-	return &fakeMediaDeleter{failFor: map[uuid.UUID]error{}}
+	return &fakeMediaDeleter{failFor: map[uuid.UUID]error{}, attached: map[uuid.UUID]uuid.UUID{}}
 }
 
 func (f *fakeMediaDeleter) failOn(apiaryID uuid.UUID, err error) {
 	f.failFor[apiaryID] = err
+}
+
+// attach registers mediaID as already attached to apiaryID, as if it had
+// been uploaded there.
+func (f *fakeMediaDeleter) attach(apiaryID, mediaID uuid.UUID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.attached[mediaID] = apiaryID
 }
 
 func (f *fakeMediaDeleter) DeleteByOwner(_ context.Context, _ string, apiaryID uuid.UUID) error {
@@ -172,6 +185,34 @@ func (f *fakeMediaDeleter) wasDeleted(apiaryID uuid.UUID) bool {
 		}
 	}
 	return false
+}
+
+func (f *fakeMediaDeleter) ListAttached(_ context.Context, _ string, apiaryID uuid.UUID) ([]uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var ids []uuid.UUID
+	for mediaID, owner := range f.attached {
+		if owner == apiaryID {
+			ids = append(ids, mediaID)
+		}
+	}
+	return ids, nil
+}
+
+func (f *fakeMediaDeleter) VerifyAttached(_ context.Context, _ string, apiaryID, mediaID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if owner, ok := f.attached[mediaID]; ok && owner == apiaryID {
+		return nil
+	}
+	return appapiary.ErrImageNotFound
+}
+
+func (f *fakeMediaDeleter) Detach(_ context.Context, _ string, mediaID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.attached, mediaID)
+	return nil
 }
 
 // newService builds a Service backed by repo, with always-succeeding fake
@@ -247,7 +288,7 @@ func TestGet_Success(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	got, err := svc.Get(context.Background(), userID, created.ID)
+	got, _, err := svc.Get(context.Background(), userID, "token", created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -259,7 +300,7 @@ func TestGet_Success(t *testing.T) {
 func TestGet_NotFound(t *testing.T) {
 	svc := newService(newFakeRepo())
 
-	_, err := svc.Get(context.Background(), uuid.New(), uuid.New())
+	_, _, err := svc.Get(context.Background(), uuid.New(), "token", uuid.New())
 	if !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Get with unknown id: got %v, want ErrNotFound", err)
 	}
@@ -280,7 +321,7 @@ func TestGet_WrongOwner_ReturnsNotFound(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = svc.Get(context.Background(), other, created.ID)
+	_, _, err = svc.Get(context.Background(), other, "token", created.ID)
 	if !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Get by non-owner: got %v, want ErrNotFound", err)
 	}
@@ -389,7 +430,7 @@ func TestUpdate_Success(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	updated, err := svc.Update(context.Background(), userID, created.ID, appapiary.UpdateInput{
+	updated, _, err := svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
 		Name:        "New name",
 		Location:    "New location",
 		Description: "New description",
@@ -416,18 +457,156 @@ func TestUpdate_WrongOwner_ReturnsNotFound(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = svc.Update(context.Background(), other, created.ID, appapiary.UpdateInput{Name: "Hijacked"})
+	_, _, err = svc.Update(context.Background(), other, "token", created.ID, appapiary.UpdateInput{Name: "Hijacked"})
 	if !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Update by non-owner: got %v, want ErrNotFound", err)
 	}
 
 	// and the original must be untouched
-	got, err := svc.Get(context.Background(), owner, created.ID)
+	got, _, err := svc.Get(context.Background(), owner, "token", created.ID)
 	if err != nil {
 		t.Fatalf("Get after failed hijack attempt: %v", err)
 	}
 	if got.Name != "Owner's apiary" {
 		t.Errorf("Name = %q after failed hijack attempt, want unchanged %q", got.Name, "Owner's apiary")
+	}
+}
+
+// TestUpdate_ImagesNil_LeavesAttachedMediaUntouched proves that omitting
+// Images from an update (the nil case) is a no-op on media-service: a
+// client updating just the name must never accidentally detach every
+// photo.
+func TestUpdate_ImagesNil_LeavesAttachedMediaUntouched(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaDeleter()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Home apiary"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	mediaID := uuid.New()
+	media.attach(created.ID, mediaID)
+
+	_, images, err := svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{Name: "Renamed"})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(images) != 1 || images[0] != mediaID {
+		t.Fatalf("images = %v, want [%s] (untouched)", images, mediaID)
+	}
+}
+
+// TestUpdate_ImagesEmpty_DetachesEverything proves that explicitly
+// sending an empty images list (as opposed to omitting the field) clears
+// every attached media item.
+func TestUpdate_ImagesEmpty_DetachesEverything(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaDeleter()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Home apiary"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	mediaID := uuid.New()
+	media.attach(created.ID, mediaID)
+
+	empty := []uuid.UUID{}
+	_, images, err := svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:   "Renamed",
+		Images: &empty,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(images) != 0 {
+		t.Fatalf("images = %v, want empty", images)
+	}
+	if _, ok := media.attached[mediaID]; ok {
+		t.Error("media should have been detached")
+	}
+}
+
+// TestUpdate_ImagesPrunesUnwanted proves that an update whose images list
+// keeps only some of the currently attached media detaches the rest,
+// without erroring on the ones that stay.
+func TestUpdate_ImagesPrunesUnwanted(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaDeleter()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Home apiary"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	keep := uuid.New()
+	drop := uuid.New()
+	media.attach(created.ID, keep)
+	media.attach(created.ID, drop)
+
+	desired := []uuid.UUID{keep, keep} // duplicated on purpose
+	_, images, err := svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:   "Renamed",
+		Images: &desired,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(images) != 1 || images[0] != keep {
+		t.Fatalf("images = %v, want [%s] deduplicated", images, keep)
+	}
+	if _, ok := media.attached[drop]; ok {
+		t.Error("drop should have been detached")
+	}
+	if _, ok := media.attached[keep]; !ok {
+		t.Error("keep should still be attached")
+	}
+}
+
+// TestUpdate_ImagesRejectsForeignMedia proves that an update can't
+// attach a media ID that isn't already this apiary's own media - one
+// belonging to a different apiary (even the same user's) is rejected,
+// and, critically, no detach happens and the apiary's other fields are
+// left unchanged.
+func TestUpdate_ImagesRejectsForeignMedia(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaDeleter()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Home apiary"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	kept := uuid.New()
+	media.attach(created.ID, kept)
+
+	otherApiary := uuid.New()
+	foreign := uuid.New()
+	media.attach(otherApiary, foreign)
+
+	desired := []uuid.UUID{foreign}
+	_, _, err = svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:   "Renamed",
+		Images: &desired,
+	})
+	if !errors.Is(err, appapiary.ErrImageNotFound) {
+		t.Fatalf("Update with foreign media: got %v, want ErrImageNotFound", err)
+	}
+
+	if _, ok := media.attached[kept]; !ok {
+		t.Error("existing media must not be detached when validation fails first")
+	}
+	got, err := repo.GetByID(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("GetByID: %v", err)
+	}
+	if got.Name != "Home apiary" {
+		t.Errorf("Name = %q after rejected update, want unchanged %q", got.Name, "Home apiary")
 	}
 }
 
@@ -445,7 +624,7 @@ func TestDelete_Success(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	if _, err := svc.Get(context.Background(), userID, created.ID); !errors.Is(err, apiary.ErrNotFound) {
+	if _, _, err := svc.Get(context.Background(), userID, "token", created.ID); !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Get after Delete: got %v, want ErrNotFound", err)
 	}
 }
@@ -465,7 +644,7 @@ func TestDelete_WrongOwner_ReturnsNotFoundAndDoesNotDelete(t *testing.T) {
 		t.Fatalf("Delete by non-owner: got %v, want ErrNotFound", err)
 	}
 
-	if _, err := svc.Get(context.Background(), owner, created.ID); err != nil {
+	if _, _, err := svc.Get(context.Background(), owner, "token", created.ID); err != nil {
 		t.Fatalf("owner's apiary should survive a failed delete attempt by another user: %v", err)
 	}
 }
@@ -492,7 +671,7 @@ func TestDelete_CascadesHivesAndMediaBeforeApiary(t *testing.T) {
 	if !media.wasDeleted(created.ID) {
 		t.Error("Delete did not cascade to media-service")
 	}
-	if _, err := svc.Get(context.Background(), userID, created.ID); !errors.Is(err, apiary.ErrNotFound) {
+	if _, _, err := svc.Get(context.Background(), userID, "token", created.ID); !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Get after Delete: got %v, want ErrNotFound", err)
 	}
 }
@@ -523,7 +702,7 @@ func TestDelete_AbortsOnHiveCascadeFailure_ApiarySurvives(t *testing.T) {
 	if media.wasDeleted(created.ID) {
 		t.Error("media-service was called even though hive-service failed first")
 	}
-	if _, err := svc.Get(context.Background(), userID, created.ID); err != nil {
+	if _, _, err := svc.Get(context.Background(), userID, "token", created.ID); err != nil {
 		t.Fatalf("apiary should survive when hive-service fails: %v", err)
 	}
 }
@@ -553,7 +732,7 @@ func TestDelete_AbortsOnMediaDeleteFailure_ApiarySurvives(t *testing.T) {
 	if !hives.wasDeleted(created.ID) {
 		t.Error("hive-service should have already been called before media-service failed")
 	}
-	if _, err := svc.Get(context.Background(), userID, created.ID); err != nil {
+	if _, _, err := svc.Get(context.Background(), userID, "token", created.ID); err != nil {
 		t.Fatalf("apiary should survive when media-service fails: %v", err)
 	}
 }

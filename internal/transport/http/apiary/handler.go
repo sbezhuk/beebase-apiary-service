@@ -26,6 +26,7 @@ import (
 const (
 	CodeApiaryNotFound  = "apiary_not_found"
 	CodeInvalidApiaryID = "invalid_apiary_id"
+	CodeImageNotFound   = "image_not_found"
 )
 
 // Handler exposes the apiary HTTP endpoints. Every method requires the
@@ -64,7 +65,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusCreated, newResponse(a))
+	httpx.WriteJSON(w, http.StatusCreated, newResponse(a, nil))
 }
 
 // List handles GET /apiaries.
@@ -91,7 +92,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 // Get handles GET /apiaries/{apiaryID}.
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
-	userID, ok := h.requireUserID(w, r)
+	userID, token, ok := h.requireAuth(w, r)
 	if !ok {
 		return
 	}
@@ -101,18 +102,18 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a, err := h.service.Get(r.Context(), userID, apiaryID)
+	a, images, err := h.service.Get(r.Context(), userID, token, apiaryID)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, newResponse(a))
+	httpx.WriteJSON(w, http.StatusOK, newResponse(a, images))
 }
 
 // Update handles PUT /apiaries/{apiaryID}.
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
-	userID, ok := h.requireUserID(w, r)
+	userID, token, ok := h.requireAuth(w, r)
 	if !ok {
 		return
 	}
@@ -127,19 +128,29 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a, err := h.service.Update(r.Context(), userID, apiaryID, appapiary.UpdateInput{
+	var images *[]uuid.UUID
+	if req.Images != nil {
+		parsed := make([]uuid.UUID, len(req.Images))
+		for i, s := range req.Images {
+			parsed[i], _ = uuid.Parse(s) // already validated by req.Validate
+		}
+		images = &parsed
+	}
+
+	a, resultImages, err := h.service.Update(r.Context(), userID, token, apiaryID, appapiary.UpdateInput{
 		Name:        req.Name,
 		Location:    req.Location,
 		Description: req.Description,
 		Lat:         req.Lat,
 		Lon:         req.Lon,
+		Images:      images,
 	})
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, newResponse(a))
+	httpx.WriteJSON(w, http.StatusOK, newResponse(a, resultImages))
 }
 
 // Delete handles DELETE /apiaries/{apiaryID}. It cascades: every hive
@@ -177,7 +188,8 @@ func (h *Handler) requireUserID(w http.ResponseWriter, r *http.Request) (uuid.UU
 // requireAuth returns the authenticated user's ID alongside their raw
 // access token (read back off the request's own Authorization header,
 // which RequireAuth already validated) so it can be forwarded to
-// hive-service/media-service when cascading a delete.
+// hive-service/media-service - when cascading a delete, or when Get/
+// Update ask media-service about this apiary's attached media.
 func (h *Handler) requireAuth(w http.ResponseWriter, r *http.Request) (uuid.UUID, string, bool) {
 	userID, ok := h.requireUserID(w, r)
 	if !ok {
@@ -203,6 +215,8 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, apiary.ErrNotFound):
 		httpx.WriteError(w, http.StatusNotFound, CodeApiaryNotFound, "apiary not found")
+	case errors.Is(err, appapiary.ErrImageNotFound):
+		httpx.WriteValidationError(w, map[string]string{"images": CodeImageNotFound})
 	default:
 		httpx.WriteInternalError(w, h.log, err)
 	}
