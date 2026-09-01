@@ -352,7 +352,7 @@ func TestApiaryRepository_Update_WrongOwner_NotFound(t *testing.T) {
 	}
 }
 
-func TestApiaryRepository_Delete_SoftDelete(t *testing.T) {
+func TestApiaryRepository_HardDelete_Success(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 
@@ -370,28 +370,25 @@ func TestApiaryRepository_Delete_SoftDelete(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := repo.Delete(ctx, userID, a.ID); err != nil {
-		t.Fatalf("Delete: %v", err)
+	if err := repo.HardDelete(ctx, userID, a.ID); err != nil {
+		t.Fatalf("HardDelete: %v", err)
 	}
 
 	if _, err := repo.GetByID(ctx, userID, a.ID); !errors.Is(err, apiary.ErrNotFound) {
-		t.Fatalf("GetByID after delete: got %v, want ErrNotFound", err)
+		t.Fatalf("GetByID after HardDelete: got %v, want ErrNotFound", err)
 	}
 
-	// The row itself must still exist (soft delete), just filtered out by
-	// deleted_at IS NULL. Verify directly against the row so this test
-	// would fail if Delete ever became a hard DELETE.
-	var deletedAt *string
-	err = tx.QueryRow(ctx, "SELECT deleted_at::text FROM apiaries WHERE id = $1", a.ID).Scan(&deletedAt)
-	if err != nil {
-		t.Fatalf("query raw row: %v", err)
+	// The row itself must be fully gone, not just deleted_at-marked.
+	var n int
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM apiaries WHERE id = $1", a.ID).Scan(&n); err != nil {
+		t.Fatalf("raw count: %v", err)
 	}
-	if deletedAt == nil {
-		t.Error("deleted_at is NULL after Delete; expected it to be set (soft delete)")
+	if n != 0 {
+		t.Errorf("apiary still present after HardDelete; want fully removed")
 	}
 }
 
-func TestApiaryRepository_Delete_WrongOwner_NotFoundAndNotDeleted(t *testing.T) {
+func TestApiaryRepository_HardDelete_WrongOwner_NotFoundAndNotDeleted(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 
@@ -410,8 +407,8 @@ func TestApiaryRepository_Delete_WrongOwner_NotFoundAndNotDeleted(t *testing.T) 
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := repo.Delete(ctx, other, a.ID); !errors.Is(err, apiary.ErrNotFound) {
-		t.Fatalf("Delete by non-owner: got %v, want ErrNotFound", err)
+	if err := repo.HardDelete(ctx, other, a.ID); !errors.Is(err, apiary.ErrNotFound) {
+		t.Fatalf("HardDelete by non-owner: got %v, want ErrNotFound", err)
 	}
 
 	if _, err := repo.GetByID(ctx, owner, a.ID); err != nil {

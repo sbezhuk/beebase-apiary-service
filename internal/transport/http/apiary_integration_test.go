@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	appapiary "github.com/sbezhuk/beebase-apiary-service/internal/application/apiary"
+	"github.com/sbezhuk/beebase-apiary-service/internal/platform/hiveclient"
+	"github.com/sbezhuk/beebase-apiary-service/internal/platform/mediaclient"
 	repopostgres "github.com/sbezhuk/beebase-apiary-service/internal/repository/postgres"
 	transporthttp "github.com/sbezhuk/beebase-apiary-service/internal/transport/http"
 	apiaryhttp "github.com/sbezhuk/beebase-apiary-service/internal/transport/http/apiary"
@@ -30,14 +33,49 @@ import (
 
 const testKID = "test-kid"
 
+// fakeCascadeTarget stands in for hive-service's or media-service's
+// delete endpoint: it always succeeds (204) and records every request it
+// received, so tests can assert apiary-service's cascade actually reached
+// it, without running a second full service.
+type fakeCascadeTarget struct {
+	mu       sync.Mutex
+	received []*http.Request
+}
+
+func newFakeCascadeTarget() *fakeCascadeTarget {
+	return &fakeCascadeTarget{}
+}
+
+func (f *fakeCascadeTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	f.received = append(f.received, r.Clone(r.Context()))
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *fakeCascadeTarget) calledWithQuery(key, value string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.received {
+		if r.URL.Query().Get(key) == value {
+			return true
+		}
+	}
+	return false
+}
+
 // testStack wires a full router against a real PostgreSQL database (every
-// write scoped to a transaction rolled back at the end of the test) and a
-// real JWKS server, exactly mirroring how apiary-service verifies tokens
-// against auth-service in production - just with a throwaway key instead
-// of auth-service's real one.
+// write scoped to a transaction rolled back at the end of the test), a
+// real JWKS server, and fake hive-service/media-service - exactly
+// mirroring how apiary-service verifies tokens against auth-service and
+// cascades a delete in production, just with throwaway stand-ins instead
+// of the real downstream services.
 type testStack struct {
-	server *httptest.Server
-	priv   ed25519.PrivateKey
+	server     *httptest.Server
+	hives      *fakeCascadeTarget
+	hiveServer *httptest.Server
+	media      *fakeCascadeTarget
+	priv       ed25519.PrivateKey
 }
 
 func newTestStack(t *testing.T) *testStack {
@@ -77,8 +115,18 @@ func newTestStack(t *testing.T) *testStack {
 		t.Fatalf("NewVerifierFromJWKSURL: %v", err)
 	}
 
+	hives := newFakeCascadeTarget()
+	hiveServer := httptest.NewServer(hives)
+	t.Cleanup(hiveServer.Close)
+
+	media := newFakeCascadeTarget()
+	mediaServer := httptest.NewServer(media)
+	t.Cleanup(mediaServer.Close)
+
 	apiaryRepo := repopostgres.NewApiaryRepository(tx)
-	apiaryService := appapiary.NewService(apiaryRepo)
+	hiveDeleter := hiveclient.New(hiveServer.URL)
+	mediaDeleter := mediaclient.New(mediaServer.URL)
+	apiaryService := appapiary.NewService(apiaryRepo, hiveDeleter, mediaDeleter)
 	log := logger.New("development", "error")
 	handler := apiaryhttp.NewHandler(apiaryService, log)
 
@@ -87,7 +135,7 @@ func newTestStack(t *testing.T) *testStack {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	return &testStack{server: srv, priv: priv}
+	return &testStack{server: srv, hives: hives, hiveServer: hiveServer, media: media, priv: priv}
 }
 
 // tokenFor signs a valid access token for userID, exactly as auth-service
@@ -356,5 +404,69 @@ func TestApiaryFlow_ListInvalidPageAndLimit(t *testing.T) {
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("GET %s: status = %d, want %d", path, resp.StatusCode, http.StatusBadRequest)
 		}
+	}
+}
+
+// TestApiaryFlow_DeleteCascadesHivesAndMedia is the end-to-end proof that
+// deleting an apiary reaches hive-service and media-service before
+// hard-deleting the apiary itself, exercised over real HTTP.
+func TestApiaryFlow_DeleteCascadesHivesAndMedia(t *testing.T) {
+	stack := newTestStack(t)
+	token := stack.tokenFor(t, uuid.New())
+
+	resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{
+		"name": "Gone soon",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var created apiaryhttp.Response
+	decodeJSON(t, resp, &created)
+
+	resp = stack.request(t, http.MethodDelete, "/api/v1/apiaries/"+created.ID.String(), token, nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	if !stack.hives.calledWithQuery("apiary_id", created.ID.String()) {
+		t.Errorf("delete did not cascade to hive-service for apiary_id=%s", created.ID)
+	}
+	if !stack.media.calledWithQuery("owner_id", created.ID.String()) {
+		t.Errorf("delete did not cascade to media-service for owner_id=%s", created.ID)
+	}
+
+	resp = stack.request(t, http.MethodGet, "/api/v1/apiaries/"+created.ID.String(), token, nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("get after delete: status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+}
+
+// TestApiaryFlow_DeleteAbortsWhenHiveServiceUnreachable proves the
+// abort-on-failure contract end-to-end: if hive-service can't be reached,
+// the apiary must survive the delete attempt.
+func TestApiaryFlow_DeleteAbortsWhenHiveServiceUnreachable(t *testing.T) {
+	stack := newTestStack(t)
+	token := stack.tokenFor(t, uuid.New())
+
+	resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{
+		"name": "Survives",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var created apiaryhttp.Response
+	decodeJSON(t, resp, &created)
+
+	// Take down the fake hive-service to simulate it being unreachable.
+	stack.hiveServer.Close()
+
+	resp = stack.request(t, http.MethodDelete, "/api/v1/apiaries/"+created.ID.String(), token, nil)
+	if resp.StatusCode == http.StatusNoContent {
+		t.Fatal("delete succeeded despite hive-service being unreachable")
+	}
+
+	resp = stack.request(t, http.MethodGet, "/api/v1/apiaries/"+created.ID.String(), token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get after aborted delete: status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
 }

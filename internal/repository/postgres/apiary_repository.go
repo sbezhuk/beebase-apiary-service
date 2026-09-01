@@ -120,16 +120,12 @@ func (r *ApiaryRepository) Update(ctx context.Context, a *apiary.Apiary) error {
 	return nil
 }
 
-func (r *ApiaryRepository) Delete(ctx context.Context, userID, apiaryID uuid.UUID) error {
-	const q = `
-		UPDATE apiaries
-		SET deleted_at = now()
-		WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
-	`
+func (r *ApiaryRepository) HardDelete(ctx context.Context, userID, apiaryID uuid.UUID) error {
+	const q = `DELETE FROM apiaries WHERE id = $1 AND user_id = $2`
 
 	tag, err := r.db.Exec(ctx, q, apiaryID, userID)
 	if err != nil {
-		return fmt.Errorf("postgres: delete apiary: %w", err)
+		return fmt.Errorf("postgres: hard delete apiary: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return apiary.ErrNotFound

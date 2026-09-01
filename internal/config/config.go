@@ -27,6 +27,13 @@ type Config struct {
 	// (GET /.well-known/jwks.json), used to verify access tokens without
 	// ever holding a key that could mint one.
 	AuthJWKSURL string
+
+	// HiveServiceURL and MediaServiceURL are hive-service's and
+	// media-service's base URLs. Deleting an apiary cascades to its hives
+	// (and, transitively, their inspections and media) and to media
+	// attached directly to the apiary.
+	HiveServiceURL  string
+	MediaServiceURL string
 }
 
 // Load builds a Config from environment variables, falling back to
@@ -47,6 +54,9 @@ func Load() (*Config, error) {
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
 		AuthJWKSURL: getEnv("AUTH_JWKS_URL", ""),
+
+		HiveServiceURL:  getEnv("HIVE_SERVICE_URL", ""),
+		MediaServiceURL: getEnv("MEDIA_SERVICE_URL", ""),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -54,6 +64,12 @@ func Load() (*Config, error) {
 	}
 	if cfg.AuthJWKSURL == "" {
 		return nil, fmt.Errorf("config: AUTH_JWKS_URL is required")
+	}
+	if cfg.HiveServiceURL == "" {
+		return nil, fmt.Errorf("config: HIVE_SERVICE_URL is required")
+	}
+	if cfg.MediaServiceURL == "" {
+		return nil, fmt.Errorf("config: MEDIA_SERVICE_URL is required")
 	}
 
 	return cfg, nil

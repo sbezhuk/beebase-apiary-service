@@ -20,11 +20,13 @@ import (
 // which enforces ownership at the query level.
 type Service struct {
 	apiaries apiary.Repository
+	hives    HiveCascadeDeleter
+	media    MediaDeleter
 }
 
 // NewService constructs a Service.
-func NewService(apiaries apiary.Repository) *Service {
-	return &Service{apiaries: apiaries}
+func NewService(apiaries apiary.Repository, hives HiveCascadeDeleter, media MediaDeleter) *Service {
+	return &Service{apiaries: apiaries, hives: hives, media: media}
 }
 
 // Create creates a new apiary owned by userID.
@@ -71,8 +73,23 @@ func (s *Service) Update(ctx context.Context, userID, apiaryID uuid.UUID, in Upd
 	return a, nil
 }
 
-// Delete deletes the apiary identified by apiaryID, if it belongs to
-// userID.
-func (s *Service) Delete(ctx context.Context, userID, apiaryID uuid.UUID) error {
-	return s.apiaries.Delete(ctx, userID, apiaryID)
+// Delete cascades: every hive under apiaryID (and, transitively, their
+// inspections and media) is deleted first via hive-service, then every
+// media item attached directly to the apiary, then the apiary itself is
+// hard-deleted. accessToken is the caller's own access token, forwarded
+// to hive-service and media-service so each can run its own ownership
+// check. If any step fails, Delete stops and returns the error without
+// rolling back steps that already succeeded - there is no distributed
+// transaction across these services, by design.
+func (s *Service) Delete(ctx context.Context, userID uuid.UUID, accessToken string, apiaryID uuid.UUID) error {
+	if _, err := s.apiaries.GetByID(ctx, userID, apiaryID); err != nil {
+		return err
+	}
+	if err := s.hives.DeleteByApiary(ctx, accessToken, apiaryID); err != nil {
+		return err
+	}
+	if err := s.media.DeleteByOwner(ctx, accessToken, apiaryID); err != nil {
+		return err
+	}
+	return s.apiaries.HardDelete(ctx, userID, apiaryID)
 }

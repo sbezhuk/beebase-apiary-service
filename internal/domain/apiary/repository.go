@@ -24,7 +24,10 @@ type Repository interface {
 	// Update persists a.Name, a.Location, a.Description, and a.UpdatedAt for the
 	// apiary identified by a.ID, scoped to a.UserID.
 	Update(ctx context.Context, a *Apiary) error
-	// Delete soft-deletes the apiary (sets deleted_at) rather than
-	// removing the row, per the project's synchronizable-entity plan.
-	Delete(ctx context.Context, userID, apiaryID uuid.UUID) error
+	// HardDelete physically removes the apiary row. There is no
+	// soft-delete path left on this port: an apiary delete is always a
+	// full cascade (see application/apiary.Service.Delete), called only
+	// after hive-service and media-service have already deleted
+	// everything that belonged to this apiary.
+	HardDelete(ctx context.Context, userID, apiaryID uuid.UUID) error
 }

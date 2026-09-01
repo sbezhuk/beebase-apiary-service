@@ -9,6 +9,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -141,9 +142,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, newResponse(a))
 }
 
-// Delete handles DELETE /apiaries/{apiaryID}.
+// Delete handles DELETE /apiaries/{apiaryID}. It cascades: every hive
+// under the apiary (and, transitively, their inspections and media), and
+// every media item attached directly to the apiary, is deleted first,
+// then the apiary itself.
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
-	userID, ok := h.requireUserID(w, r)
+	userID, token, ok := h.requireAuth(w, r)
 	if !ok {
 		return
 	}
@@ -153,7 +157,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.Delete(r.Context(), userID, apiaryID); err != nil {
+	if err := h.service.Delete(r.Context(), userID, token, apiaryID); err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
@@ -168,6 +172,22 @@ func (h *Handler) requireUserID(w http.ResponseWriter, r *http.Request) (uuid.UU
 		return uuid.Nil, false
 	}
 	return userID, true
+}
+
+// requireAuth returns the authenticated user's ID alongside their raw
+// access token (read back off the request's own Authorization header,
+// which RequireAuth already validated) so it can be forwarded to
+// hive-service/media-service when cascading a delete.
+func (h *Handler) requireAuth(w http.ResponseWriter, r *http.Request) (uuid.UUID, string, bool) {
+	userID, ok := h.requireUserID(w, r)
+	if !ok {
+		return uuid.Nil, "", false
+	}
+
+	const prefix = "Bearer "
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), prefix)
+
+	return userID, token, true
 }
 
 func (h *Handler) pathApiaryID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

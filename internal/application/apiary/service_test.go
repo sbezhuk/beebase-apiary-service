@@ -86,22 +86,105 @@ func (f *fakeRepo) Update(_ context.Context, a *apiary.Apiary) error {
 	return nil
 }
 
-func (f *fakeRepo) Delete(_ context.Context, userID, apiaryID uuid.UUID) error {
+func (f *fakeRepo) HardDelete(_ context.Context, userID, apiaryID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	a, ok := f.byID[apiaryID]
-	if !ok || a.UserID != userID || a.DeletedAt != nil {
+	if !ok || a.UserID != userID {
 		return apiary.ErrNotFound
 	}
-	now := a.UpdatedAt
-	a.DeletedAt = &now
+	delete(f.byID, apiaryID)
 	return nil
+}
+
+// --- fake hive/media deleters ---
+
+// fakeHiveDeleter simulates hive-service's DeleteByApiary: it records
+// every apiaryID it was asked to cascade, and can be configured to fail
+// for specific apiaryIDs to exercise the cascade's abort-on-failure
+// behavior.
+type fakeHiveDeleter struct {
+	mu      sync.Mutex
+	deleted []uuid.UUID
+	failFor map[uuid.UUID]error
+}
+
+func newFakeHiveDeleter() *fakeHiveDeleter {
+	return &fakeHiveDeleter{failFor: map[uuid.UUID]error{}}
+}
+
+func (f *fakeHiveDeleter) failOn(apiaryID uuid.UUID, err error) {
+	f.failFor[apiaryID] = err
+}
+
+func (f *fakeHiveDeleter) DeleteByApiary(_ context.Context, _ string, apiaryID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err, ok := f.failFor[apiaryID]; ok {
+		return err
+	}
+	f.deleted = append(f.deleted, apiaryID)
+	return nil
+}
+
+func (f *fakeHiveDeleter) wasDeleted(apiaryID uuid.UUID) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range f.deleted {
+		if id == apiaryID {
+			return true
+		}
+	}
+	return false
+}
+
+// fakeMediaDeleter is the media-service equivalent of fakeHiveDeleter.
+type fakeMediaDeleter struct {
+	mu      sync.Mutex
+	deleted []uuid.UUID
+	failFor map[uuid.UUID]error
+}
+
+func newFakeMediaDeleter() *fakeMediaDeleter {
+	return &fakeMediaDeleter{failFor: map[uuid.UUID]error{}}
+}
+
+func (f *fakeMediaDeleter) failOn(apiaryID uuid.UUID, err error) {
+	f.failFor[apiaryID] = err
+}
+
+func (f *fakeMediaDeleter) DeleteByOwner(_ context.Context, _ string, apiaryID uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err, ok := f.failFor[apiaryID]; ok {
+		return err
+	}
+	f.deleted = append(f.deleted, apiaryID)
+	return nil
+}
+
+func (f *fakeMediaDeleter) wasDeleted(apiaryID uuid.UUID) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, id := range f.deleted {
+		if id == apiaryID {
+			return true
+		}
+	}
+	return false
+}
+
+// newService builds a Service backed by repo, with always-succeeding fake
+// hive/media deleters - the right default for every test that isn't
+// specifically exercising the delete cascade.
+func newService(repo *fakeRepo) *appapiary.Service {
+	return appapiary.NewService(repo, newFakeHiveDeleter(), newFakeMediaDeleter())
 }
 
 // --- tests ---
 
 func TestCreate_Success(t *testing.T) {
-	svc := appapiary.NewService(newFakeRepo())
+	svc := newService(newFakeRepo())
 	userID := uuid.New()
 
 	a, err := svc.Create(context.Background(), userID, appapiary.CreateInput{
@@ -121,7 +204,7 @@ func TestCreate_Success(t *testing.T) {
 }
 
 func TestCreate_WithCoordinates(t *testing.T) {
-	svc := appapiary.NewService(newFakeRepo())
+	svc := newService(newFakeRepo())
 	userID := uuid.New()
 	lat, lon := 45.5, -122.6
 
@@ -142,7 +225,7 @@ func TestCreate_WithCoordinates(t *testing.T) {
 }
 
 func TestCreate_WithoutCoordinates(t *testing.T) {
-	svc := appapiary.NewService(newFakeRepo())
+	svc := newService(newFakeRepo())
 	userID := uuid.New()
 
 	a, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Home apiary"})
@@ -156,7 +239,7 @@ func TestCreate_WithoutCoordinates(t *testing.T) {
 
 func TestGet_Success(t *testing.T) {
 	repo := newFakeRepo()
-	svc := appapiary.NewService(repo)
+	svc := newService(repo)
 	userID := uuid.New()
 
 	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "A"})
@@ -174,7 +257,7 @@ func TestGet_Success(t *testing.T) {
 }
 
 func TestGet_NotFound(t *testing.T) {
-	svc := appapiary.NewService(newFakeRepo())
+	svc := newService(newFakeRepo())
 
 	_, err := svc.Get(context.Background(), uuid.New(), uuid.New())
 	if !errors.Is(err, apiary.ErrNotFound) {
@@ -188,7 +271,7 @@ func TestGet_NotFound(t *testing.T) {
 // exist" from "exists but isn't mine".
 func TestGet_WrongOwner_ReturnsNotFound(t *testing.T) {
 	repo := newFakeRepo()
-	svc := appapiary.NewService(repo)
+	svc := newService(repo)
 	owner := uuid.New()
 	other := uuid.New()
 
@@ -205,7 +288,7 @@ func TestGet_WrongOwner_ReturnsNotFound(t *testing.T) {
 
 func TestList_ReturnsOnlyOwnApiaries(t *testing.T) {
 	repo := newFakeRepo()
-	svc := appapiary.NewService(repo)
+	svc := newService(repo)
 	userA := uuid.New()
 	userB := uuid.New()
 
@@ -238,7 +321,7 @@ func TestList_ReturnsOnlyOwnApiaries(t *testing.T) {
 
 func TestList_Pagination(t *testing.T) {
 	repo := newFakeRepo()
-	svc := appapiary.NewService(repo)
+	svc := newService(repo)
 	userID := uuid.New()
 
 	for i := 0; i < 5; i++ {
@@ -282,7 +365,7 @@ func TestList_Pagination(t *testing.T) {
 }
 
 func TestList_Empty(t *testing.T) {
-	svc := appapiary.NewService(newFakeRepo())
+	svc := newService(newFakeRepo())
 
 	list, total, err := svc.List(context.Background(), uuid.New(), pagination.Params{Page: 1, Limit: pagination.DefaultLimit})
 	if err != nil {
@@ -298,7 +381,7 @@ func TestList_Empty(t *testing.T) {
 
 func TestUpdate_Success(t *testing.T) {
 	repo := newFakeRepo()
-	svc := appapiary.NewService(repo)
+	svc := newService(repo)
 	userID := uuid.New()
 
 	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Old name"})
@@ -324,7 +407,7 @@ func TestUpdate_Success(t *testing.T) {
 
 func TestUpdate_WrongOwner_ReturnsNotFound(t *testing.T) {
 	repo := newFakeRepo()
-	svc := appapiary.NewService(repo)
+	svc := newService(repo)
 	owner := uuid.New()
 	other := uuid.New()
 
@@ -350,7 +433,7 @@ func TestUpdate_WrongOwner_ReturnsNotFound(t *testing.T) {
 
 func TestDelete_Success(t *testing.T) {
 	repo := newFakeRepo()
-	svc := appapiary.NewService(repo)
+	svc := newService(repo)
 	userID := uuid.New()
 
 	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Gone soon"})
@@ -358,7 +441,7 @@ func TestDelete_Success(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := svc.Delete(context.Background(), userID, created.ID); err != nil {
+	if err := svc.Delete(context.Background(), userID, "token", created.ID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
 
@@ -369,7 +452,7 @@ func TestDelete_Success(t *testing.T) {
 
 func TestDelete_WrongOwner_ReturnsNotFoundAndDoesNotDelete(t *testing.T) {
 	repo := newFakeRepo()
-	svc := appapiary.NewService(repo)
+	svc := newService(repo)
 	owner := uuid.New()
 	other := uuid.New()
 
@@ -378,11 +461,99 @@ func TestDelete_WrongOwner_ReturnsNotFoundAndDoesNotDelete(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := svc.Delete(context.Background(), other, created.ID); !errors.Is(err, apiary.ErrNotFound) {
+	if err := svc.Delete(context.Background(), other, "attacker-token", created.ID); !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Delete by non-owner: got %v, want ErrNotFound", err)
 	}
 
 	if _, err := svc.Get(context.Background(), owner, created.ID); err != nil {
 		t.Fatalf("owner's apiary should survive a failed delete attempt by another user: %v", err)
+	}
+}
+
+func TestDelete_CascadesHivesAndMediaBeforeApiary(t *testing.T) {
+	repo := newFakeRepo()
+	hives := newFakeHiveDeleter()
+	media := newFakeMediaDeleter()
+	svc := appapiary.NewService(repo, hives, media)
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Gone soon"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := svc.Delete(context.Background(), userID, "token", created.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if !hives.wasDeleted(created.ID) {
+		t.Error("Delete did not cascade to hive-service")
+	}
+	if !media.wasDeleted(created.ID) {
+		t.Error("Delete did not cascade to media-service")
+	}
+	if _, err := svc.Get(context.Background(), userID, created.ID); !errors.Is(err, apiary.ErrNotFound) {
+		t.Fatalf("Get after Delete: got %v, want ErrNotFound", err)
+	}
+}
+
+// TestDelete_AbortsOnHiveCascadeFailure_ApiarySurvives is the core
+// abort-on-failure guarantee: if hive-service can't be reached (or fails
+// for any other reason), the apiary itself must not be deleted -
+// otherwise its hives (and their inspections/media) would be permanently
+// orphaned.
+func TestDelete_AbortsOnHiveCascadeFailure_ApiarySurvives(t *testing.T) {
+	repo := newFakeRepo()
+	hives := newFakeHiveDeleter()
+	media := newFakeMediaDeleter()
+	svc := appapiary.NewService(repo, hives, media)
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Survives"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	boom := errors.New("hive-service unreachable")
+	hives.failOn(created.ID, boom)
+
+	if err := svc.Delete(context.Background(), userID, "token", created.ID); !errors.Is(err, boom) {
+		t.Fatalf("Delete: got %v, want %v", err, boom)
+	}
+
+	if media.wasDeleted(created.ID) {
+		t.Error("media-service was called even though hive-service failed first")
+	}
+	if _, err := svc.Get(context.Background(), userID, created.ID); err != nil {
+		t.Fatalf("apiary should survive when hive-service fails: %v", err)
+	}
+}
+
+// TestDelete_AbortsOnMediaDeleteFailure_ApiarySurvives mirrors the
+// previous test for the second cascade step: media-service failing must
+// also stop the apiary itself from being deleted, even though
+// hive-service's step already succeeded.
+func TestDelete_AbortsOnMediaDeleteFailure_ApiarySurvives(t *testing.T) {
+	repo := newFakeRepo()
+	hives := newFakeHiveDeleter()
+	media := newFakeMediaDeleter()
+	svc := appapiary.NewService(repo, hives, media)
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Survives"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	boom := errors.New("media-service unreachable")
+	media.failOn(created.ID, boom)
+
+	if err := svc.Delete(context.Background(), userID, "token", created.ID); !errors.Is(err, boom) {
+		t.Fatalf("Delete: got %v, want %v", err, boom)
+	}
+
+	if !hives.wasDeleted(created.ID) {
+		t.Error("hive-service should have already been called before media-service failed")
+	}
+	if _, err := svc.Get(context.Background(), userID, created.ID); err != nil {
+		t.Fatalf("apiary should survive when media-service fails: %v", err)
 	}
 }
