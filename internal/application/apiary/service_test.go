@@ -140,18 +140,26 @@ func (f *fakeHiveDeleter) wasDeleted(apiaryID uuid.UUID) bool {
 
 // fakeMediaDeleter is the media-service equivalent of fakeHiveDeleter. It
 // also stands in for the rest of application/apiary.MediaClient: attached
-// tracks which media IDs are attached to which apiary, seeded via
-// attach(), so tests can exercise Update's images reconciliation without
-// a real media-service.
+// tracks which media IDs are attached to which apiary (seeded via
+// attach(), as if already linked), and unattached tracks the caller's own
+// uploads that exist but aren't linked to anything yet (seeded via
+// uploadUnattached()) - together enough to exercise Update's images
+// reconciliation, including attaching a fresh upload, without a real
+// media-service.
 type fakeMediaDeleter struct {
-	mu       sync.Mutex
-	deleted  []uuid.UUID
-	failFor  map[uuid.UUID]error
-	attached map[uuid.UUID]uuid.UUID // mediaID -> apiaryID
+	mu         sync.Mutex
+	deleted    []uuid.UUID
+	failFor    map[uuid.UUID]error
+	attached   map[uuid.UUID]uuid.UUID // mediaID -> apiaryID
+	unattached map[uuid.UUID]bool      // mediaID -> exists, belongs to the caller, not yet attached
 }
 
 func newFakeMediaDeleter() *fakeMediaDeleter {
-	return &fakeMediaDeleter{failFor: map[uuid.UUID]error{}, attached: map[uuid.UUID]uuid.UUID{}}
+	return &fakeMediaDeleter{
+		failFor:    map[uuid.UUID]error{},
+		attached:   map[uuid.UUID]uuid.UUID{},
+		unattached: map[uuid.UUID]bool{},
+	}
 }
 
 func (f *fakeMediaDeleter) failOn(apiaryID uuid.UUID, err error) {
@@ -159,11 +167,21 @@ func (f *fakeMediaDeleter) failOn(apiaryID uuid.UUID, err error) {
 }
 
 // attach registers mediaID as already attached to apiaryID, as if it had
-// been uploaded there.
+// been uploaded and linked there.
 func (f *fakeMediaDeleter) attach(apiaryID, mediaID uuid.UUID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.attached[mediaID] = apiaryID
+}
+
+// uploadUnattached registers mediaID as an existing upload belonging to
+// the caller, not yet attached to anything - the fixture Update's images
+// reconciliation needs to prove it can attach a fresh upload, not just
+// keep one already linked.
+func (f *fakeMediaDeleter) uploadUnattached(mediaID uuid.UUID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unattached[mediaID] = true
 }
 
 func (f *fakeMediaDeleter) DeleteByOwner(_ context.Context, _ string, apiaryID uuid.UUID) error {
@@ -199,13 +217,21 @@ func (f *fakeMediaDeleter) ListAttached(_ context.Context, _ string, apiaryID uu
 	return ids, nil
 }
 
-func (f *fakeMediaDeleter) VerifyAttached(_ context.Context, _ string, apiaryID, mediaID uuid.UUID) error {
+func (f *fakeMediaDeleter) Attach(_ context.Context, _ string, apiaryID, mediaID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if owner, ok := f.attached[mediaID]; ok && owner == apiaryID {
-		return nil
+	if owner, ok := f.attached[mediaID]; ok {
+		if owner == apiaryID {
+			return nil // idempotent replay
+		}
+		return appapiary.ErrImageNotFound // attached to a different owner
 	}
-	return appapiary.ErrImageNotFound
+	if !f.unattached[mediaID] {
+		return appapiary.ErrImageNotFound // unknown, or not the caller's
+	}
+	delete(f.unattached, mediaID)
+	f.attached[mediaID] = apiaryID
+	return nil
 }
 
 func (f *fakeMediaDeleter) Detach(_ context.Context, _ string, mediaID uuid.UUID) error {
@@ -607,6 +633,40 @@ func TestUpdate_ImagesRejectsForeignMedia(t *testing.T) {
 	}
 	if got.Name != "Home apiary" {
 		t.Errorf("Name = %q after rejected update, want unchanged %q", got.Name, "Home apiary")
+	}
+}
+
+// TestUpdate_ImagesAttachesFreshUpload proves media-service's decoupled
+// upload flow end to end from apiary-service's side: an ID for media the
+// caller uploaded but never attached to anything can be named in
+// images and gets linked to this apiary, not just IDs already attached
+// here.
+func TestUpdate_ImagesAttachesFreshUpload(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaDeleter()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, appapiary.CreateInput{Name: "Home apiary"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	fresh := uuid.New()
+	media.uploadUnattached(fresh)
+
+	desired := []uuid.UUID{fresh}
+	_, images, err := svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:   "Renamed",
+		Images: &desired,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(images) != 1 || images[0] != fresh {
+		t.Fatalf("images = %v, want [%s]", images, fresh)
+	}
+	if owner, ok := media.attached[fresh]; !ok || owner != created.ID {
+		t.Errorf("fresh upload was not attached to the apiary: attached=%v ok=%v", owner, ok)
 	}
 }
 

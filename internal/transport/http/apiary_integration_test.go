@@ -35,14 +35,15 @@ import (
 const testKID = "test-kid"
 
 // fakeCascadeTarget stands in for hive-service's or media-service's
-// delete endpoint, and - for media-service - the read endpoints
+// delete endpoint, and - for media-service - the endpoints
 // apiary-service's Get/Update now call to reconcile an apiary's attached
 // images: it always succeeds, answering GET /api/v1/media?owner_id=... and
-// GET /api/v1/media/{id} from an in-memory set of "attached" media a test
-// can seed via attach(), and 204 to everything else (including DELETE, so
-// it still works as a plain cascade-delete stand-in for hive-service). It
-// records every request it received, so tests can assert apiary-service's
-// cascade actually reached it, without running a second full service.
+// POST /api/v1/media/{id}/attach from an in-memory set of "attached" media
+// a test can seed via attach(), and 204 to everything else (including
+// DELETE, so it still works as a plain cascade-delete stand-in for
+// hive-service). It records every request it received, so tests can
+// assert apiary-service's cascade actually reached it, without running a
+// second full service.
 type fakeCascadeTarget struct {
 	mu       sync.Mutex
 	received []*http.Request
@@ -54,8 +55,8 @@ func newFakeCascadeTarget() *fakeCascadeTarget {
 }
 
 // attach registers mediaID as already attached to ownerID, so this fake's
-// GET endpoints report it as media-service would - letting a test
-// exercise images reconciliation without a real media-service.
+// endpoints report it as media-service would - letting a test exercise
+// images reconciliation without a real media-service.
 func (f *fakeCascadeTarget) attach(ownerID, mediaID uuid.UUID) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -68,8 +69,8 @@ func (f *fakeCascadeTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Unlock()
 
 	switch {
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/media/"):
-		f.serveGetOne(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach"):
+		f.serveAttach(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/media":
 		f.serveList(w, r)
 	default:
@@ -77,24 +78,52 @@ func (f *fakeCascadeTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (f *fakeCascadeTarget) serveGetOne(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(strings.TrimPrefix(r.URL.Path, "/api/v1/media/"))
+// serveAttach answers POST /api/v1/media/{id}/attach: 200 if mediaID is
+// already attached to the requested owner (idempotent replay) or a fresh
+// mediaID this fake doesn't otherwise recognize would need to be pre-seeded
+// via attach() first, 409 if attached to a different owner, 404 for an
+// unrecognized mediaID - mirroring media-service's real Attach semantics
+// closely enough for apiary-service's own reconciliation logic to be
+// exercised against it.
+func (f *fakeCascadeTarget) serveAttach(w http.ResponseWriter, r *http.Request) {
+	idStr := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/media/"), "/attach")
+	mediaID, err := uuid.Parse(idStr)
 	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		OwnerType string `json:"owner_type"`
+		OwnerID   string `json:"owner_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	ownerID, err := uuid.Parse(body.OwnerID)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
 	f.mu.Lock()
-	ownerID, ok := f.attached[id]
-	f.mu.Unlock()
+	existing, ok := f.attached[mediaID]
+	if ok && existing != ownerID {
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusConflict)
+		return
+	}
 	if !ok {
+		f.mu.Unlock()
 		w.WriteHeader(http.StatusNotFound)
 		return
 	}
+	f.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id": id, "owner_type": "APIARY", "owner_id": ownerID,
+		"id": mediaID, "owner_type": body.OwnerType, "owner_id": ownerID,
 	})
 }
 

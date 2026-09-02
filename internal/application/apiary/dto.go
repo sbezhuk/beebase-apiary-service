@@ -21,9 +21,11 @@ type UpdateInput struct {
 	Description string
 	Lat         *float64
 	Lon         *float64
-	// Images is the desired final set of already-uploaded media IDs
-	// attached to this apiary. Nil means "leave attached media alone";
-	// a non-nil slice (including an empty one) replaces the attached set
-	// exactly, detaching whatever isn't listed.
+	// Images is the desired final set of media IDs attached to this
+	// apiary - each one either already attached here, or the caller's
+	// own not-yet-attached upload (media-service links it on the fly).
+	// Nil means "leave attached media alone"; a non-nil slice (including
+	// an empty one) replaces the attached set exactly, attaching
+	// whatever's newly listed and detaching whatever isn't listed.
 	Images *[]uuid.UUID
 }

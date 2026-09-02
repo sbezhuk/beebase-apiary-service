@@ -7,6 +7,17 @@ info:
     tokens are issued by auth-service (see its OpenAPI spec); this
     service verifies them against auth-service's public key and never
     trusts a userID from anywhere but a verified token.
+
+    Photos and other files are uploaded directly to media-service (see its
+    OpenAPI spec) independently of any apiary - upload doesn't require one
+    to exist yet, and this service never receives file bytes. `images` on
+    an apiary is the set of media IDs media-service currently has attached
+    to it - read-only on every response, and settable only via PUT: an ID
+    already attached here stays; an ID for the caller's own not-yet-
+    attached upload gets linked to this apiary on the fly; anything else
+    (unknown, someone else's, or already attached elsewhere - a media
+    item's owner is fixed the first time it's attached and can't be moved)
+    is rejected.
   version: 0.1.0
 servers:
   - url: http://localhost:8080
@@ -56,11 +67,16 @@ paths:
     post:
       tags: [apiaries]
       summary: Create an apiary
+      description: >
+        There's no images field here: media-service requires the apiary it
+        attaches a file to already exist, so a newly created apiary always
+        starts with no images. Upload photos afterward via media-service,
+        then use PUT to manage which ones stay attached.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ApiaryRequest" }
+            schema: { $ref: "#/components/schemas/ApiaryCreateRequest" }
       responses:
         "201":
           description: Apiary created.
@@ -84,7 +100,10 @@ paths:
       description: >
         Returns only apiaries owned by the caller — never another user's —
         as a page of results. Omitting page/limit falls back to page=1,
-        limit=20.
+        limit=20. Each item's `images` is always an empty array: listing
+        deliberately skips the per-apiary media-service round trip that
+        populating it for every item on the page would require. Fetch
+        GET /apiaries/{apiaryId} for a specific apiary's actual images.
       parameters:
         - name: page
           in: query
@@ -131,7 +150,8 @@ paths:
       description: >
         Returns 404 both when apiaryId doesn't exist and when it belongs
         to a different user — the two cases are indistinguishable to the
-        caller, by design.
+        caller, by design. `images` reflects media-service's current
+        state at the time of the call.
       responses:
         "200":
           description: The apiary.
@@ -158,13 +178,23 @@ paths:
       tags: [apiaries]
       summary: Replace an apiary's editable fields
       description: >
-        Full replacement (PUT semantics), not a partial patch: name,
-        location, and description are all set from the request body.
+        Full replacement (PUT semantics), not a partial patch, for name,
+        location, description, lat, and lon. `images` is the one
+        exception: omitting it (or sending JSON null) leaves currently
+        attached media untouched, while sending an array (including an
+        empty one) replaces the attached set exactly - attaching whichever
+        of the caller's own not-yet-attached uploads are newly listed
+        (linked to this apiary on the fly, via media-service) and
+        detaching whatever isn't listed. An ID that doesn't identify
+        either media already attached here or the caller's own
+        not-yet-attached upload is rejected (a media item's owner is fixed
+        the first time it's attached and can't be moved between apiaries
+        or hives).
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ApiaryRequest" }
+            schema: { $ref: "#/components/schemas/ApiaryUpdateRequest" }
       responses:
         "200":
           description: The updated apiary.
@@ -172,7 +202,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiaryResponse" }
         "400":
-          description: apiaryId is not a valid UUID, or the request failed validation.
+          description: >
+            apiaryId is not a valid UUID, the request failed validation, or
+            images contains an ID that doesn't identify media already
+            attached to this apiary.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
@@ -224,7 +257,7 @@ components:
       properties:
         status: { type: string, example: ok }
 
-    ApiaryRequest:
+    ApiaryCreateRequest:
       type: object
       required: [name]
       properties:
@@ -246,6 +279,38 @@ components:
           nullable: true
           description: Longitude of the apiary, in decimal degrees.
 
+    ApiaryUpdateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, maxLength: 200 }
+        location: { type: string, maxLength: 500 }
+        description: { type: string, maxLength: 2000 }
+        lat:
+          type: number
+          format: double
+          minimum: -90
+          maximum: 90
+          nullable: true
+          description: Latitude of the apiary, in decimal degrees.
+        lon:
+          type: number
+          format: double
+          minimum: -180
+          maximum: 180
+          nullable: true
+          description: Longitude of the apiary, in decimal degrees.
+        images:
+          type: array
+          items: { type: string, format: uuid }
+          description: >
+            The desired final set of media IDs (returned by media-service's
+            upload endpoint) attached to this apiary. Omit this field (or
+            send null) to leave currently attached media untouched; send an
+            array (including an empty one) to replace the attached set
+            exactly. Each ID must already be attached to this apiary, or be
+            the caller's own not-yet-attached upload (linked on the fly).
+
     ApiaryResponse:
       type: object
       properties:
@@ -255,6 +320,13 @@ components:
         description: { type: string }
         lat: { type: number, format: double, nullable: true }
         lon: { type: number, format: double, nullable: true }
+        images:
+          type: array
+          items: { type: string, format: uuid }
+          description: >
+            The IDs of media currently attached to this apiary. Always
+            empty on a list item (see GET /apiaries) and on a freshly
+            created apiary.
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -305,6 +377,13 @@ components:
               description: >
                 Field name to error code. Each value is a stable key (not a
                 human-readable message) meant to be localized client-side.
+                "images" carries "images_invalid" when an entry isn't a
+                well-formed UUID, or "image_not_found" when an entry is a
+                well-formed UUID that can't be attached to this apiary
+                (whether because it doesn't exist, belongs to a different
+                user, or is already attached to a different owner - these
+                are deliberately indistinguishable, the same non-leaking
+                convention apiary_not_found already follows).
               additionalProperties:
                 type: string
                 enum:
@@ -314,6 +393,8 @@ components:
                   - description_too_long
                   - lat_out_of_range
                   - lon_out_of_range
+                  - images_invalid
+                  - image_not_found
                   - invalid_page
                   - invalid_limit
               example: { name: "name_required" }

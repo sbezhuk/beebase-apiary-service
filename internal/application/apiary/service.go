@@ -104,12 +104,13 @@ func (s *Service) Update(ctx context.Context, userID uuid.UUID, accessToken stri
 // reconcileImages makes apiaryID's attached media in media-service match
 // desired exactly, and returns the resulting set. Every currently
 // attached media ID absent from desired is detached; every ID in desired
-// must already be attached to apiaryID - a media item's owner is fixed at
-// upload time in media-service and can't be moved between owners, so this
-// can only ever prune the attached set, never attach media uploaded
-// elsewhere - or Update fails with ErrImageNotFound before any detach
-// happens. desired is deduplicated first so a client submitting the same
-// ID twice can't cause redundant work or an error.
+// not already attached is linked via media-service's Attach - which
+// succeeds only for the caller's own, not-yet-attached media (or media
+// already attached to this same apiary), and fails with ErrImageNotFound
+// for anything else (unknown, someone else's, or already attached to a
+// different owner - a media item's owner is fixed the first time it's
+// attached and can't be moved). desired is deduplicated first so a client
+// submitting the same ID twice can't cause redundant work or an error.
 func (s *Service) reconcileImages(ctx context.Context, accessToken string, apiaryID uuid.UUID, desired []uuid.UUID) ([]uuid.UUID, error) {
 	current, err := s.media.ListAttached(ctx, accessToken, apiaryID)
 	if err != nil {
@@ -134,7 +135,7 @@ func (s *Service) reconcileImages(ctx context.Context, accessToken string, apiar
 		if currentSet[id] {
 			continue
 		}
-		if err := s.media.VerifyAttached(ctx, accessToken, apiaryID, id); err != nil {
+		if err := s.media.Attach(ctx, accessToken, apiaryID, id); err != nil {
 			return nil, err
 		}
 	}
