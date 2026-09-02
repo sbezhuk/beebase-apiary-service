@@ -29,33 +29,40 @@ func NewService(apiaries apiary.Repository, hives HiveCascadeDeleter, media Medi
 	return &Service{apiaries: apiaries, hives: hives, media: media}
 }
 
-// Create creates a new apiary owned by userID.
-func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) (*apiary.Apiary, error) {
+// Create creates a new apiary owned by userID. If in.Images is non-empty,
+// it's deduplicated (preserving first-seen order) and every id's
+// ownership is verified against media-service (see
+// MediaClient.VerifyOwnership) before anything is persisted; if
+// verification fails, Create returns the error immediately, having
+// created nothing - there is no rollback to do, unlike the old
+// attach-after-insert flow this replaced. accessToken is the caller's own
+// access token, forwarded to media-service.
+func (s *Service) Create(ctx context.Context, userID uuid.UUID, accessToken string, in CreateInput) (*apiary.Apiary, error) {
+	dedup := dedupeImages(in.Images)
+
+	if len(dedup) > 0 {
+		if err := s.media.VerifyOwnership(ctx, accessToken, dedup); err != nil {
+			return nil, err
+		}
+	}
+
 	a := apiary.New(userID, in.Name, in.Location, in.Description)
 	a.Lat = in.Lat
 	a.Lon = in.Lon
+	a.Images = dedup
+
 	if err := s.apiaries.Create(ctx, a); err != nil {
 		return nil, fmt.Errorf("apiary: create: %w", err)
 	}
+
 	return a, nil
 }
 
 // Get returns the apiary identified by apiaryID, if it belongs to
-// userID, alongside the IDs of every media item currently attached to
-// it. accessToken is the caller's own access token, forwarded to
-// media-service so it can run its own ownership check.
-func (s *Service) Get(ctx context.Context, userID uuid.UUID, accessToken string, apiaryID uuid.UUID) (*apiary.Apiary, []uuid.UUID, error) {
-	a, err := s.apiaries.GetByID(ctx, userID, apiaryID)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	images, err := s.media.ListAttached(ctx, accessToken, apiaryID)
-	if err != nil {
-		return nil, nil, fmt.Errorf("apiary: list attached media: %w", err)
-	}
-
-	return a, images, nil
+// userID - including the media ids it references (Apiary.Images), read
+// straight from the row rather than a media-service round trip.
+func (s *Service) Get(ctx context.Context, userID, apiaryID uuid.UUID) (*apiary.Apiary, error) {
+	return s.apiaries.GetByID(ctx, userID, apiaryID)
 }
 
 // List returns the page of apiaries described by p, out of every apiary
@@ -65,26 +72,32 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, p pagination.Param
 }
 
 // Update replaces the editable fields of the apiary identified by
-// apiaryID, if it belongs to userID, and returns the resulting set of
-// attached media IDs. accessToken is the caller's own access token,
-// forwarded to media-service so it can run its own ownership check. When
-// in.Images is non-nil, it reconciles the apiary's attached media in
-// media-service to match exactly (see reconcileImages); when nil, the
-// currently attached media is left untouched and simply reported back.
-func (s *Service) Update(ctx context.Context, userID uuid.UUID, accessToken string, apiaryID uuid.UUID, in UpdateInput) (*apiary.Apiary, []uuid.UUID, error) {
+// apiaryID, if it belongs to userID, and returns the resulting apiary.
+// accessToken is the caller's own access token, forwarded to
+// media-service so it can run its own ownership check. When in.Images is
+// non-nil, it's deduplicated (preserving first-seen order) and, if
+// non-empty, every id's ownership is verified against media-service
+// before anything changes; if verification fails, Update returns the
+// error immediately, leaving the apiary's row (including its current
+// Images) completely untouched. On success, Images is simply replaced
+// with the deduplicated set - there is nothing external to reconcile
+// against, since apiary-service's own Images column is already the sole
+// source of truth for what's referenced. When in.Images is nil, Images is
+// left untouched entirely.
+func (s *Service) Update(ctx context.Context, userID uuid.UUID, accessToken string, apiaryID uuid.UUID, in UpdateInput) (*apiary.Apiary, error) {
 	a, err := s.apiaries.GetByID(ctx, userID, apiaryID)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	var images []uuid.UUID
 	if in.Images != nil {
-		images, err = s.reconcileImages(ctx, accessToken, apiaryID, *in.Images)
-	} else {
-		images, err = s.media.ListAttached(ctx, accessToken, apiaryID)
-	}
-	if err != nil {
-		return nil, nil, err
+		dedup := dedupeImages(*in.Images)
+		if len(dedup) > 0 {
+			if err := s.media.VerifyOwnership(ctx, accessToken, dedup); err != nil {
+				return nil, err
+			}
+		}
+		a.Images = dedup
 	}
 
 	a.Name = in.Name
@@ -95,80 +108,50 @@ func (s *Service) Update(ctx context.Context, userID uuid.UUID, accessToken stri
 	a.UpdatedAt = time.Now().UTC()
 
 	if err := s.apiaries.Update(ctx, a); err != nil {
-		return nil, nil, fmt.Errorf("apiary: update: %w", err)
+		return nil, fmt.Errorf("apiary: update: %w", err)
 	}
 
-	return a, images, nil
+	return a, nil
 }
 
-// reconcileImages makes apiaryID's attached media in media-service match
-// desired exactly, and returns the resulting set. Every currently
-// attached media ID absent from desired is detached; every ID in desired
-// not already attached is linked via media-service's Attach - which
-// succeeds only for the caller's own, not-yet-attached media (or media
-// already attached to this same apiary), and fails with ErrImageNotFound
-// for anything else (unknown, someone else's, or already attached to a
-// different owner - a media item's owner is fixed the first time it's
-// attached and can't be moved). desired is deduplicated first so a client
-// submitting the same ID twice can't cause redundant work or an error.
-func (s *Service) reconcileImages(ctx context.Context, accessToken string, apiaryID uuid.UUID, desired []uuid.UUID) ([]uuid.UUID, error) {
-	current, err := s.media.ListAttached(ctx, accessToken, apiaryID)
-	if err != nil {
-		return nil, fmt.Errorf("apiary: list attached media: %w", err)
-	}
-	currentSet := make(map[uuid.UUID]bool, len(current))
-	for _, id := range current {
-		currentSet[id] = true
-	}
-
-	wanted := make(map[uuid.UUID]bool, len(desired))
-	dedup := make([]uuid.UUID, 0, len(desired))
-	for _, id := range desired {
-		if wanted[id] {
+// dedupeImages returns ids with duplicates removed, preserving the order
+// each id first appeared in - so a client submitting the same id twice
+// can't cause redundant work or a spurious count mismatch against
+// media-service's response.
+func dedupeImages(ids []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]bool, len(ids))
+	dedup := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if seen[id] {
 			continue
 		}
-		wanted[id] = true
+		seen[id] = true
 		dedup = append(dedup, id)
 	}
-
-	for _, id := range dedup {
-		if currentSet[id] {
-			continue
-		}
-		if err := s.media.Attach(ctx, accessToken, apiaryID, id); err != nil {
-			return nil, err
-		}
-	}
-
-	for id := range currentSet {
-		if wanted[id] {
-			continue
-		}
-		if err := s.media.Detach(ctx, accessToken, id); err != nil {
-			return nil, fmt.Errorf("apiary: detach media %s: %w", id, err)
-		}
-	}
-
-	return dedup, nil
+	return dedup
 }
 
 // Delete cascades: every hive under apiaryID (and, transitively, their
 // inspections and media) is deleted first via hive-service, then every
-// media item attached directly to the apiary, then the apiary itself is
-// hard-deleted. accessToken is the caller's own access token, forwarded
-// to hive-service and media-service so each can run its own ownership
-// check. If any step fails, Delete stops and returns the error without
-// rolling back steps that already succeeded - there is no distributed
-// transaction across these services, by design.
+// media file this apiary itself references (a.Images) is hard-deleted via
+// media-service, then the apiary itself is hard-deleted. accessToken is
+// the caller's own access token, forwarded to hive-service and
+// media-service so each can run its own ownership check. If any step
+// fails, Delete stops and returns the error without rolling back steps
+// that already succeeded - there is no distributed transaction across
+// these services, by design.
 func (s *Service) Delete(ctx context.Context, userID uuid.UUID, accessToken string, apiaryID uuid.UUID) error {
-	if _, err := s.apiaries.GetByID(ctx, userID, apiaryID); err != nil {
+	a, err := s.apiaries.GetByID(ctx, userID, apiaryID)
+	if err != nil {
 		return err
 	}
 	if err := s.hives.DeleteByApiary(ctx, accessToken, apiaryID); err != nil {
 		return err
 	}
-	if err := s.media.DeleteByOwner(ctx, accessToken, apiaryID); err != nil {
-		return err
+	if len(a.Images) > 0 {
+		if err := s.media.DeleteByIDs(ctx, accessToken, a.Images); err != nil {
+			return err
+		}
 	}
 	return s.apiaries.HardDelete(ctx, userID, apiaryID)
 }

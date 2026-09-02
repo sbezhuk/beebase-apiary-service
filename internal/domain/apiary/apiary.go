@@ -22,8 +22,12 @@ type Apiary struct {
 	// Lat and Lon are the apiary's GPS coordinates. Both are optional
 	// (nil when not set) and independent of Location, which is a free-text
 	// description.
-	Lat       *float64
-	Lon       *float64
+	Lat *float64
+	Lon *float64
+	// Images is the set of media ids attached to this apiary - the source
+	// of truth for what's attached (nothing asks media-service on every
+	// read). Never nil; empty when there are no photos.
+	Images    []uuid.UUID
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time

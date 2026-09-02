@@ -9,6 +9,10 @@ type CreateInput struct {
 	Description string
 	Lat         *float64
 	Lon         *float64
+	// Images is the set of already-uploaded media ids to attach
+	// immediately, so a caller doesn't need a separate PUT just to attach
+	// photos. Empty/nil means no images.
+	Images []uuid.UUID
 }
 
 // UpdateInput is the input to Service.Update. Update replaces all fields

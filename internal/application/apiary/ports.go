@@ -14,25 +14,22 @@ type HiveCascadeDeleter interface {
 	DeleteByApiary(ctx context.Context, accessToken string, apiaryID uuid.UUID) error
 }
 
-// MediaClient is apiary-service's dependency on media-service: deleting
-// every media item attached directly to an apiary (as opposed to one of
-// its hives) when cascading an apiary delete, and reconciling which media
-// stay attached to an apiary on update.
+// MediaClient is apiary-service's dependency on media-service.
+// apiary-service is the sole source of truth for which media ids are
+// referenced by a given apiary (see Apiary.Images) - media-service has no
+// notion of apiaries/hives at all. This client is used only to verify, on
+// create/update, that every newly-referenced media id actually belongs to
+// the caller, and to hard-delete an apiary's own media files when the
+// apiary itself is cascade-deleted.
 type MediaClient interface {
-	// DeleteByOwner deletes every media item attached directly to an
-	// apiary.
-	DeleteByOwner(ctx context.Context, accessToken string, apiaryID uuid.UUID) error
-	// ListAttached returns the IDs of every media item currently
-	// attached to apiaryID, belonging to whoever presented accessToken.
-	ListAttached(ctx context.Context, accessToken string, apiaryID uuid.UUID) ([]uuid.UUID, error)
-	// Attach links mediaID to apiaryID in media-service, on behalf of
-	// whoever presented accessToken. It succeeds (as a no-op) if mediaID
-	// is already attached to apiaryID, and returns ErrImageNotFound if
-	// mediaID doesn't exist, doesn't belong to the caller, or is already
-	// attached to a different owner - a media item's owner is fixed the
-	// first time it's attached and can't be moved.
-	Attach(ctx context.Context, accessToken string, apiaryID, mediaID uuid.UUID) error
-	// Detach removes a single media item, used to drop images an update
-	// no longer wants attached to this apiary.
-	Detach(ctx context.Context, accessToken string, mediaID uuid.UUID) error
+	// VerifyOwnership confirms every id in ids belongs to the caller
+	// (whoever presented accessToken), by asking media-service directly -
+	// it's the only remaining source of truth for "does this media id
+	// exist and belong to me". Returns ErrImageNotFound if any id doesn't
+	// (unknown, deleted, or someone else's - indistinguishable, by the
+	// same non-leaking convention apiary.ErrNotFound already follows).
+	VerifyOwnership(ctx context.Context, accessToken string, ids []uuid.UUID) error
+	// DeleteByIDs hard-deletes every media item in ids, used when the
+	// apiary itself is being cascade-deleted.
+	DeleteByIDs(ctx context.Context, accessToken string, ids []uuid.UUID) error
 }

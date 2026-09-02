@@ -21,11 +21,11 @@ type Response struct {
 	UpdatedAt   time.Time   `json:"updated_at"`
 }
 
-// newResponse builds a Response for a, with images as the IDs of media
-// currently attached to it. A nil images (e.g. a freshly created apiary,
-// or a list item that deliberately skips the media-service round trip)
-// renders as "images": [] rather than null.
-func newResponse(a *apiary.Apiary, images []uuid.UUID) Response {
+// newResponse builds a Response for a. Images is read straight from a -
+// never nil (Apiary.Images is always a real, possibly-empty slice) - so
+// it renders as "images": [] rather than null when there are no photos.
+func newResponse(a *apiary.Apiary) Response {
+	images := a.Images
 	if images == nil {
 		images = []uuid.UUID{}
 	}
@@ -42,15 +42,10 @@ func newResponse(a *apiary.Apiary, images []uuid.UUID) Response {
 	}
 }
 
-// newListResponse deliberately omits each item's attached media: fetching
-// it would mean one media-service round trip per apiary in the page (up
-// to MaxLimit), an N+1 fan-out this endpoint doesn't pay. Clients that
-// need images for a listed apiary can fetch it directly via GET
-// /apiaries/{id}, or query media-service's own list-by-owner endpoint.
 func newListResponse(apiaries []*apiary.Apiary) []Response {
 	out := make([]Response, len(apiaries))
 	for i, a := range apiaries {
-		out[i] = newResponse(a, nil)
+		out[i] = newResponse(a)
 	}
 	return out
 }
