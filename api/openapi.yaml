@@ -319,6 +319,22 @@ components:
             belong to the caller. Dropping an id only removes the
             reference - it does not delete the underlying file.
 
+    ApiaryImage:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        image_url:
+          type: string
+          format: uri
+          description: >
+            The authenticated URL to fetch or display this image's
+            content from (media-service's GET /media/{id}/download,
+            reverse-proxied by the gateway). Built fresh on every
+            response - if the underlying file ever changes, this URL's
+            id stays the same but its content does not, so clients
+            should not cache a fetched image keyed only by this URL
+            without also checking for staleness.
+
     ApiaryResponse:
       type: object
       properties:
@@ -330,9 +346,9 @@ components:
         lon: { type: number, format: double, nullable: true }
         images:
           type: array
-          items: { type: string, format: uuid }
+          items: { $ref: "#/components/schemas/ApiaryImage" }
           description: >
-            The IDs of media currently attached to this apiary, in every
+            The media currently attached to this apiary, in every
             response including list items (see GET /apiaries) - never
             null, empty when there are no photos.
         created_at: { type: string, format: date-time }

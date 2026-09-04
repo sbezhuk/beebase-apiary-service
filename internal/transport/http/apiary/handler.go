@@ -32,13 +32,16 @@ const (
 // Handler exposes the apiary HTTP endpoints. Every method requires the
 // request to have already passed through httpmw.RequireAuth.
 type Handler struct {
-	service *appapiary.Service
-	log     *slog.Logger
+	service       *appapiary.Service
+	log           *slog.Logger
+	publicBaseURL string
 }
 
-// NewHandler returns a Handler backed by service.
-func NewHandler(service *appapiary.Service, log *slog.Logger) *Handler {
-	return &Handler{service: service, log: log}
+// NewHandler returns a Handler backed by service. publicBaseURL is the
+// gateway's externally reachable base URL, used to build each image's
+// image_url.
+func NewHandler(service *appapiary.Service, log *slog.Logger, publicBaseURL string) *Handler {
+	return &Handler{service: service, log: log, publicBaseURL: publicBaseURL}
 }
 
 // Create handles POST /apiaries.
@@ -71,7 +74,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusCreated, newResponse(a))
+	httpx.WriteJSON(w, http.StatusCreated, newResponse(a, h.publicBaseURL))
 }
 
 // List handles GET /apiaries.
@@ -93,7 +96,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, pagination.NewResponse(newListResponse(apiaries), p, total))
+	httpx.WriteJSON(w, http.StatusOK, pagination.NewResponse(newListResponse(apiaries, h.publicBaseURL), p, total))
 }
 
 // Get handles GET /apiaries/{apiaryID}.
@@ -114,7 +117,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, newResponse(a))
+	httpx.WriteJSON(w, http.StatusOK, newResponse(a, h.publicBaseURL))
 }
 
 // Update handles PUT /apiaries/{apiaryID}.
@@ -156,7 +159,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusOK, newResponse(a))
+	httpx.WriteJSON(w, http.StatusOK, newResponse(a, h.publicBaseURL))
 }
 
 // Delete handles DELETE /apiaries/{apiaryID}. It cascades: every hive

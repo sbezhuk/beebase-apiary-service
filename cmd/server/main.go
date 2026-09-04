@@ -69,7 +69,7 @@ func run() error {
 	hiveDeleter := hiveclient.New(cfg.HiveServiceURL)
 	mediaDeleter := mediaclient.New(cfg.MediaServiceURL)
 	apiaryService := appapiary.NewService(apiaryRepo, hiveDeleter, mediaDeleter)
-	apiaryHandler := apiaryhttp.NewHandler(apiaryService, log)
+	apiaryHandler := apiaryhttp.NewHandler(apiaryService, log, cfg.PublicBaseURL)
 
 	router := transporthttp.NewRouter(log, db, apiaryHandler, verifier)
 

@@ -193,7 +193,7 @@ func newTestStack(t *testing.T) *testStack {
 	mediaDeleter := mediaclient.New(mediaServer.URL)
 	apiaryService := appapiary.NewService(apiaryRepo, hiveDeleter, mediaDeleter)
 	log := logger.New("development", "error")
-	handler := apiaryhttp.NewHandler(apiaryService, log)
+	handler := apiaryhttp.NewHandler(apiaryService, log, "http://localhost:8080")
 
 	router := transporthttp.NewRouter(log, pool, handler, verifier)
 
@@ -598,7 +598,7 @@ func TestApiaryFlow_UpdateReplacesImages(t *testing.T) {
 	}
 	var pruned apiaryhttp.Response
 	decodeJSON(t, resp, &pruned)
-	if len(pruned.Images) != 1 || pruned.Images[0] != keep {
+	if len(pruned.Images) != 1 || pruned.Images[0].ID != keep {
 		t.Fatalf("update with images: images = %v, want [%s]", pruned.Images, keep)
 	}
 	if stack.media.calledWithQueryValue("ids", drop.String()) {
