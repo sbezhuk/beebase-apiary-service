@@ -185,6 +185,24 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// DeleteAllMine handles DELETE /apiaries. It cascades every apiary the
+// caller owns (and, transitively, their hives, inspections, and media).
+// Called by auth-service when it deletes an account, forwarding the
+// caller's own access token.
+func (h *Handler) DeleteAllMine(w http.ResponseWriter, r *http.Request) {
+	userID, token, ok := h.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	if err := h.service.DeleteAllByUser(r.Context(), userID, token); err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *Handler) requireUserID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	userID, ok := httpmw.UserIDFromContext(r.Context())
 	if !ok {

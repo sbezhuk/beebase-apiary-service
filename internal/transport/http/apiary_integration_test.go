@@ -539,6 +539,71 @@ func TestApiaryFlow_DeleteAbortsWhenHiveServiceUnreachable(t *testing.T) {
 	}
 }
 
+// TestApiaryFlow_DeleteAllMineCascadesEveryApiary is DeleteAllMine's
+// end-to-end proof: called by auth-service when it deletes an account,
+// DELETE /api/v1/apiaries (no id) must cascade every apiary the caller
+// owns - each one exactly as DELETE /apiaries/{id} would - and never
+// touch another user's apiaries.
+func TestApiaryFlow_DeleteAllMineCascadesEveryApiary(t *testing.T) {
+	stack := newTestStack(t)
+	userID := uuid.New()
+	token := stack.tokenFor(t, userID)
+	otherToken := stack.tokenFor(t, uuid.New())
+	photo := uuid.New()
+	stack.media.own(photo)
+
+	resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]any{
+		"name":   "First",
+		"images": []string{photo.String()},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create first: status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var first apiaryhttp.Response
+	decodeJSON(t, resp, &first)
+
+	resp = stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{"name": "Second"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create second: status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var second apiaryhttp.Response
+	decodeJSON(t, resp, &second)
+
+	resp = stack.request(t, http.MethodPost, "/api/v1/apiaries", otherToken, map[string]string{"name": "Not yours"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create other user's apiary: status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var theirs apiaryhttp.Response
+	decodeJSON(t, resp, &theirs)
+
+	resp = stack.request(t, http.MethodDelete, "/api/v1/apiaries", token, nil)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete all mine: status = %d, want %d", resp.StatusCode, http.StatusNoContent)
+	}
+
+	if !stack.hives.calledWithQuery("apiary_id", first.ID.String()) {
+		t.Errorf("delete all mine did not cascade to hive-service for apiary_id=%s", first.ID)
+	}
+	if !stack.hives.calledWithQuery("apiary_id", second.ID.String()) {
+		t.Errorf("delete all mine did not cascade to hive-service for apiary_id=%s", second.ID)
+	}
+	if !stack.media.calledWithQueryValue("ids", photo.String()) {
+		t.Errorf("delete all mine did not cascade to media-service for the first apiary's own image %s", photo)
+	}
+
+	for _, gone := range []apiaryhttp.Response{first, second} {
+		resp = stack.request(t, http.MethodGet, "/api/v1/apiaries/"+gone.ID.String(), token, nil)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Errorf("get %s after delete all mine: status = %d, want %d", gone.ID, resp.StatusCode, http.StatusNotFound)
+		}
+	}
+
+	resp = stack.request(t, http.MethodGet, "/api/v1/apiaries/"+theirs.ID.String(), otherToken, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("another user's apiary should survive: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
 // TestApiaryFlow_UpdateReplacesImages is the end-to-end proof of the
 // images feature: a GET reports whatever apiary-service itself
 // persisted, an update that doesn't mention images leaves it alone, and

@@ -74,6 +74,25 @@ func (f *fakeRepo) ListByUser(_ context.Context, userID uuid.UUID, p pagination.
 	return all[start:end], total, nil
 }
 
+func (f *fakeRepo) ListAllByUser(_ context.Context, userID uuid.UUID) ([]*apiary.Apiary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var all []*apiary.Apiary
+	for _, a := range f.byID {
+		if a.UserID == userID && a.DeletedAt == nil {
+			cp := *a
+			all = append(all, &cp)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].CreatedAt.Before(all[j].CreatedAt)
+		}
+		return all[i].ID.String() < all[j].ID.String()
+	})
+	return all, nil
+}
+
 func (f *fakeRepo) Update(_ context.Context, a *apiary.Apiary) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -871,5 +890,110 @@ func TestDelete_AbortsOnMediaDeleteFailure_ApiarySurvives(t *testing.T) {
 	}
 	if _, err := svc.Get(context.Background(), userID, created.ID); err != nil {
 		t.Fatalf("apiary should survive when media-service fails: %v", err)
+	}
+}
+
+// TestDeleteAllByUser_CascadesEveryApiary proves every apiary the user
+// owns is cascaded (hives, then the apiary's own images, then the apiary
+// row), and that another user's apiary is left completely untouched.
+func TestDeleteAllByUser_CascadesEveryApiary(t *testing.T) {
+	repo := newFakeRepo()
+	hives := newFakeHiveDeleter()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, hives, media)
+	userID := uuid.New()
+	other := uuid.New()
+	photo := uuid.New()
+	media.own(photo)
+
+	a1, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "First"})
+	if err != nil {
+		t.Fatalf("Create a1: %v", err)
+	}
+	a2, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name:   "Second",
+		Images: []uuid.UUID{photo},
+	})
+	if err != nil {
+		t.Fatalf("Create a2: %v", err)
+	}
+	theirs, err := svc.Create(context.Background(), other, "other-token", appapiary.CreateInput{Name: "Not yours"})
+	if err != nil {
+		t.Fatalf("Create theirs: %v", err)
+	}
+
+	if err := svc.DeleteAllByUser(context.Background(), userID, "token"); err != nil {
+		t.Fatalf("DeleteAllByUser: %v", err)
+	}
+
+	if _, err := svc.Get(context.Background(), userID, a1.ID); !errors.Is(err, apiary.ErrNotFound) {
+		t.Errorf("a1 after DeleteAllByUser: got %v, want ErrNotFound", err)
+	}
+	if _, err := svc.Get(context.Background(), userID, a2.ID); !errors.Is(err, apiary.ErrNotFound) {
+		t.Errorf("a2 after DeleteAllByUser: got %v, want ErrNotFound", err)
+	}
+	if !hives.wasDeleted(a1.ID) || !hives.wasDeleted(a2.ID) {
+		t.Error("DeleteAllByUser did not cascade to hive-service for every apiary")
+	}
+	if !media.wasDeleted(photo) {
+		t.Error("DeleteAllByUser did not cascade to media-service for a2's own image")
+	}
+
+	if _, err := svc.Get(context.Background(), other, theirs.ID); err != nil {
+		t.Fatalf("another user's apiary should survive: %v", err)
+	}
+}
+
+// TestDeleteAllByUser_NoApiaries_Noop proves an account with no apiaries at
+// all is handled cleanly - the cascade to hive-service/media-service is
+// simply never invoked, not an error.
+func TestDeleteAllByUser_NoApiaries_Noop(t *testing.T) {
+	repo := newFakeRepo()
+	hives := newFakeHiveDeleter()
+	media := newFakeMediaClient()
+	media.failDeleteWith(errors.New("should never be called"))
+	svc := appapiary.NewService(repo, hives, media)
+	userID := uuid.New()
+
+	if err := svc.DeleteAllByUser(context.Background(), userID, "token"); err != nil {
+		t.Fatalf("DeleteAllByUser: %v", err)
+	}
+	if media.deleteCallCount() != 0 {
+		t.Error("media-service was called even though the user owned no apiaries")
+	}
+}
+
+// TestDeleteAllByUser_AbortsOnFirstFailure_RemainingApiariesSurvive proves
+// the same no-rollback, stop-at-first-failure contract as Delete, applied
+// across a batch: once one apiary's cascade fails, DeleteAllByUser stops
+// immediately, leaving any apiary not yet processed completely intact.
+func TestDeleteAllByUser_AbortsOnFirstFailure_RemainingApiariesSurvive(t *testing.T) {
+	repo := newFakeRepo()
+	hives := newFakeHiveDeleter()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, hives, media)
+	userID := uuid.New()
+
+	a1, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "First"})
+	if err != nil {
+		t.Fatalf("Create a1: %v", err)
+	}
+	a2, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Second"})
+	if err != nil {
+		t.Fatalf("Create a2: %v", err)
+	}
+
+	boom := errors.New("hive-service unreachable")
+	hives.failOn(a1.ID, boom)
+
+	if err := svc.DeleteAllByUser(context.Background(), userID, "token"); !errors.Is(err, boom) {
+		t.Fatalf("DeleteAllByUser: got %v, want %v", err, boom)
+	}
+
+	if _, err := svc.Get(context.Background(), userID, a1.ID); err != nil {
+		t.Fatalf("a1 should survive its own failed cascade: %v", err)
+	}
+	if _, err := svc.Get(context.Background(), userID, a2.ID); err != nil {
+		t.Fatalf("a2, not yet reached, should survive: %v", err)
 	}
 }

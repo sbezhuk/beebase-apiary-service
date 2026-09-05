@@ -40,6 +40,12 @@ func NewRouter(
 		r.Get("/{apiaryID}", apiaryHandler.Get)
 		r.Put("/{apiaryID}", apiaryHandler.Update)
 		r.Delete("/{apiaryID}", apiaryHandler.Delete)
+		// Internal-only: called by auth-service when it deletes an account,
+		// forwarding the caller's own access token. This route group's
+		// RequireAuth can't distinguish that from a genuine end-user call -
+		// beebase-gateway is what actually blocks external reachability, by
+		// never proxying this exact method+path.
+		r.Delete("/", apiaryHandler.DeleteAllMine)
 	})
 
 	return r

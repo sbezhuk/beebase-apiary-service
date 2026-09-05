@@ -145,7 +145,32 @@ func (s *Service) Delete(ctx context.Context, userID uuid.UUID, accessToken stri
 	if err != nil {
 		return err
 	}
-	if err := s.hives.DeleteByApiary(ctx, accessToken, apiaryID); err != nil {
+	return s.deleteCascade(ctx, userID, accessToken, a)
+}
+
+// DeleteAllByUser cascades every apiary userID owns, in-process (no
+// self-HTTP-call): for each apiary it runs the identical cascade Delete
+// uses. It stops at the first apiary that fails, leaving apiaries already
+// fully deleted earlier in the loop deleted - the same no-rollback
+// contract as Delete, just applied across a batch. Used by auth-service
+// when it deletes an account, forwarding the caller's own access token.
+func (s *Service) DeleteAllByUser(ctx context.Context, userID uuid.UUID, accessToken string) error {
+	apiaries, err := s.apiaries.ListAllByUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("apiary: list all by user: %w", err)
+	}
+
+	for _, a := range apiaries {
+		if err := s.deleteCascade(ctx, userID, accessToken, a); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Service) deleteCascade(ctx context.Context, userID uuid.UUID, accessToken string, a *apiary.Apiary) error {
+	if err := s.hives.DeleteByApiary(ctx, accessToken, a.ID); err != nil {
 		return err
 	}
 	if len(a.Images) > 0 {
@@ -153,5 +178,5 @@ func (s *Service) Delete(ctx context.Context, userID uuid.UUID, accessToken stri
 			return err
 		}
 	}
-	return s.apiaries.HardDelete(ctx, userID, apiaryID)
+	return s.apiaries.HardDelete(ctx, userID, a.ID)
 }

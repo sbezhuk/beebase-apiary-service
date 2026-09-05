@@ -102,6 +102,38 @@ func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID, p p
 	return apiaries, total, nil
 }
 
+// ListAllByUser returns every apiary belonging to userID, unpaginated -
+// used only by the account-deletion cascade (application/apiary.Service.
+// DeleteAllByUser), never by an HTTP-facing listing.
+func (r *ApiaryRepository) ListAllByUser(ctx context.Context, userID uuid.UUID) ([]*apiary.Apiary, error) {
+	const q = `
+		SELECT id, user_id, name, location, description, lat, lon, images, created_at, updated_at, deleted_at
+		FROM apiaries
+		WHERE user_id = $1 AND deleted_at IS NULL
+		ORDER BY created_at ASC, id ASC
+	`
+
+	rows, err := r.db.Query(ctx, q, userID)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list all apiaries by user: %w", err)
+	}
+	defer rows.Close()
+
+	apiaries := []*apiary.Apiary{}
+	for rows.Next() {
+		var a apiary.Apiary
+		if err := rows.Scan(&a.ID, &a.UserID, &a.Name, &a.Location, &a.Description, &a.Lat, &a.Lon, &a.Images, &a.CreatedAt, &a.UpdatedAt, &a.DeletedAt); err != nil {
+			return nil, fmt.Errorf("postgres: scan apiary: %w", err)
+		}
+		apiaries = append(apiaries, &a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: list all apiaries by user: %w", err)
+	}
+
+	return apiaries, nil
+}
+
 func (r *ApiaryRepository) Update(ctx context.Context, a *apiary.Apiary) error {
 	const q = `
 		UPDATE apiaries

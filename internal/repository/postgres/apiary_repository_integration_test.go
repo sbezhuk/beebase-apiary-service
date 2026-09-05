@@ -472,3 +472,69 @@ func TestApiaryRepository_HardDelete_WrongOwner_NotFoundAndNotDeleted(t *testing
 		t.Fatalf("owner's apiary should survive a failed delete attempt: %v", err)
 	}
 }
+
+// TestApiaryRepository_ListAllByUser_Unpaginated proves ListAllByUser -
+// used only by the account-deletion cascade - returns every apiary a user
+// owns regardless of how many there are, unlike ListByUser's page-limited
+// counterpart, and never leaks another user's apiaries.
+func TestApiaryRepository_ListAllByUser_Unpaginated(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewApiaryRepository(tx)
+	userA := uuid.New()
+	userB := uuid.New()
+
+	names := make([]string, pagination.DefaultLimit+5)
+	for i := range names {
+		names[i] = uuid.NewString()
+	}
+	for _, name := range names {
+		if err := repo.Create(ctx, apiary.New(userA, name, "", "")); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	if err := repo.Create(ctx, apiary.New(userB, "not yours", "", "")); err != nil {
+		t.Fatalf("create userB's apiary: %v", err)
+	}
+
+	all, err := repo.ListAllByUser(ctx, userA)
+	if err != nil {
+		t.Fatalf("ListAllByUser: %v", err)
+	}
+	if len(all) != len(names) {
+		t.Fatalf("ListAllByUser returned %d apiaries, want %d (beyond one page)", len(all), len(names))
+	}
+	for _, a := range all {
+		if a.UserID != userA {
+			t.Errorf("ListAllByUser leaked apiary %s owned by %s", a.ID, a.UserID)
+		}
+	}
+}
+
+func TestApiaryRepository_ListAllByUser_Empty(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewApiaryRepository(tx)
+
+	all, err := repo.ListAllByUser(ctx, uuid.New())
+	if err != nil {
+		t.Fatalf("ListAllByUser: %v", err)
+	}
+	if len(all) != 0 {
+		t.Fatalf("ListAllByUser for a user with none = %d, want 0", len(all))
+	}
+}
