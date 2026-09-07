@@ -33,6 +33,18 @@ import (
 
 const testKID = "test-kid"
 
+// alwaysActiveSessionChecker is a stand-in for *sessionstore.Store: these
+// integration tests mint tokens directly (see tokenFor) rather than going
+// through auth-service's real session-issuing flow, so there's no actual
+// session to track here - immediate cross-session revocation is exercised
+// by auth-service's own integration test and by beebase-common/authmw's
+// unit tests instead.
+type alwaysActiveSessionChecker struct{}
+
+func (alwaysActiveSessionChecker) IsActive(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	return true, nil
+}
+
 // fakeCascadeTarget stands in for hive-service's delete endpoint and, for
 // media-service, the GET /api/v1/media?ids= and DELETE /api/v1/media?ids=
 // endpoints apiary-service now calls to verify image ownership on
@@ -175,7 +187,7 @@ func newTestStack(t *testing.T) *testStack {
 	jwksServer := httptest.NewServer(jwksHandler)
 	t.Cleanup(jwksServer.Close)
 
-	verifier, err := authmw.NewVerifierFromJWKSURL(context.Background(), jwksServer.URL)
+	verifier, err := authmw.NewVerifierFromJWKSURL(context.Background(), jwksServer.URL, alwaysActiveSessionChecker{})
 	if err != nil {
 		t.Fatalf("NewVerifierFromJWKSURL: %v", err)
 	}
