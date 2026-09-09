@@ -19,8 +19,10 @@ type Repository interface {
 	GetByID(ctx context.Context, userID, apiaryID uuid.UUID) (*Apiary, error)
 	// ListByUser returns the page of apiaries described by p, along with
 	// the total number of apiaries userID owns (independent of p, for
-	// computing pagination metadata).
-	ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params) (apiaries []*Apiary, total int, err error)
+	// computing pagination metadata). When search is non-nil its value is
+	// matched case-insensitively against name and location; a nil search
+	// means no filter.
+	ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params, search *string) (apiaries []*Apiary, total int, err error)
 	// ListAllByUser returns every apiary userID owns, unpaginated. Used
 	// only by Service.DeleteAllByUser, which must cascade-delete every
 	// apiary an account owns regardless of how many there are - unlike

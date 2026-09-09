@@ -66,9 +66,10 @@ func (s *Service) Get(ctx context.Context, userID, apiaryID uuid.UUID) (*apiary.
 }
 
 // List returns the page of apiaries described by p, out of every apiary
-// belonging to userID.
-func (s *Service) List(ctx context.Context, userID uuid.UUID, p pagination.Params) ([]*apiary.Apiary, int, error) {
-	return s.apiaries.ListByUser(ctx, userID, p)
+// belonging to userID. When search is non-nil its value is matched
+// case-insensitively against the apiary's name and location fields.
+func (s *Service) List(ctx context.Context, userID uuid.UUID, p pagination.Params, search *string) ([]*apiary.Apiary, int, error) {
+	return s.apiaries.ListByUser(ctx, userID, p, search)
 }
 
 // Update replaces the editable fields of the apiary identified by
