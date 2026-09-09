@@ -475,6 +475,8 @@ func TestApiaryFlow_ListInvalidPageAndLimit(t *testing.T) {
 		"/api/v1/apiaries?limit=0",
 		"/api/v1/apiaries?limit=101",
 		"/api/v1/apiaries?limit=abc",
+		"/api/v1/apiaries?search=a",
+		"/api/v1/apiaries?search=ab",
 	}
 	for _, path := range cases {
 		resp := stack.request(t, http.MethodGet, path, token, nil)
