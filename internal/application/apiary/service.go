@@ -5,6 +5,7 @@ package apiary
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -19,14 +20,15 @@ import (
 // transport layer) and passes it straight through to the repository,
 // which enforces ownership at the query level.
 type Service struct {
-	apiaries apiary.Repository
-	hives    HiveCascadeDeleter
-	media    MediaClient
+	apiaries      apiary.Repository
+	hives         HiveCascadeDeleter
+	media         MediaClient
+	subscriptions EntitlementResolver
 }
 
 // NewService constructs a Service.
-func NewService(apiaries apiary.Repository, hives HiveCascadeDeleter, media MediaClient) *Service {
-	return &Service{apiaries: apiaries, hives: hives, media: media}
+func NewService(apiaries apiary.Repository, hives HiveCascadeDeleter, media MediaClient, subscriptions EntitlementResolver) *Service {
+	return &Service{apiaries: apiaries, hives: hives, media: media, subscriptions: subscriptions}
 }
 
 // Create creates a new apiary owned by userID. If in.Images is non-empty,
@@ -36,8 +38,25 @@ func NewService(apiaries apiary.Repository, hives HiveCascadeDeleter, media Medi
 // verification fails, Create returns the error immediately, having
 // created nothing - there is no rollback to do, unlike the old
 // attach-after-insert flow this replaced. accessToken is the caller's own
-// access token, forwarded to media-service.
+// access token, forwarded to media-service and subscription-service.
 func (s *Service) Create(ctx context.Context, userID uuid.UUID, accessToken string, in CreateInput) (*apiary.Apiary, error) {
+	entitlement, err := s.subscriptions.GetEntitlement(ctx, accessToken)
+	if err != nil {
+		return nil, fmt.Errorf("apiary: resolve entitlement: %w", err)
+	}
+
+	maxApiaries := 0 // 0 means unlimited
+	if entitlement == EntitlementFree {
+		count, err := s.apiaries.CountByUser(ctx, userID)
+		if err != nil {
+			return nil, fmt.Errorf("apiary: count apiaries: %w", err)
+		}
+		if count >= FreeMaxApiaries {
+			return nil, ErrApiaryLimitReached
+		}
+		maxApiaries = FreeMaxApiaries
+	}
+
 	dedup := dedupeImages(in.Images)
 
 	if len(dedup) > 0 {
@@ -51,7 +70,10 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, accessToken stri
 	a.Lon = in.Lon
 	a.Images = dedup
 
-	if err := s.apiaries.Create(ctx, a); err != nil {
+	if err := s.apiaries.CreateWithLimit(ctx, a, maxApiaries); err != nil {
+		if errors.Is(err, apiary.ErrLimitReached) {
+			return nil, ErrApiaryLimitReached
+		}
 		return nil, fmt.Errorf("apiary: create: %w", err)
 	}
 

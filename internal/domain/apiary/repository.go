@@ -16,6 +16,12 @@ import (
 // writing another user's apiary.
 type Repository interface {
 	Create(ctx context.Context, a *Apiary) error
+	// CreateWithLimit creates a new apiary, but only if the user owns fewer
+	// than maxCount active apiaries. If maxCount <= 0, creation is unlimited.
+	// Returns ErrLimitReached if the limit is exceeded.
+	CreateWithLimit(ctx context.Context, a *Apiary, maxCount int) error
+	// CountByUser returns the total number of non-deleted apiaries owned by userID.
+	CountByUser(ctx context.Context, userID uuid.UUID) (int, error)
 	GetByID(ctx context.Context, userID, apiaryID uuid.UUID) (*Apiary, error)
 	// ListByUser returns the page of apiaries described by p, along with
 	// the total number of apiaries userID owns (independent of p, for

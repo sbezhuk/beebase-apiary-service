@@ -24,10 +24,11 @@ import (
 // Error codes for apiary failures, returned as the top-level "error.code".
 // Each is a stable key a client can map to a localized message.
 const (
-	CodeApiaryNotFound  = "apiary_not_found"
-	CodeInvalidApiaryID = "invalid_apiary_id"
-	CodeImageNotFound   = "image_not_found"
-	CodeInvalidSearch   = "invalid_search"
+	CodeApiaryNotFound     = "apiary_not_found"
+	CodeInvalidApiaryID    = "invalid_apiary_id"
+	CodeImageNotFound      = "image_not_found"
+	CodeInvalidSearch      = "invalid_search"
+	CodeApiaryLimitReached = "apiary_limit_reached"
 )
 
 const minSearchLength = 3
@@ -263,6 +264,8 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteError(w, http.StatusNotFound, CodeApiaryNotFound, "apiary not found")
 	case errors.Is(err, appapiary.ErrImageNotFound):
 		httpx.WriteValidationError(w, map[string]string{"images": CodeImageNotFound})
+	case errors.Is(err, appapiary.ErrApiaryLimitReached):
+		httpx.WriteError(w, http.StatusForbidden, CodeApiaryLimitReached, "free tier allows a maximum of 1 apiary")
 	default:
 		httpx.WriteInternalError(w, h.log, err)
 	}

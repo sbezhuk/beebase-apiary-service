@@ -21,6 +21,7 @@ import (
 	appapiary "github.com/sbezhuk/beebase-apiary-service/internal/application/apiary"
 	"github.com/sbezhuk/beebase-apiary-service/internal/platform/hiveclient"
 	"github.com/sbezhuk/beebase-apiary-service/internal/platform/mediaclient"
+	"github.com/sbezhuk/beebase-apiary-service/internal/platform/subscriptionclient"
 	repopostgres "github.com/sbezhuk/beebase-apiary-service/internal/repository/postgres"
 	transporthttp "github.com/sbezhuk/beebase-apiary-service/internal/transport/http"
 	apiaryhttp "github.com/sbezhuk/beebase-apiary-service/internal/transport/http/apiary"
@@ -147,11 +148,48 @@ func (f *fakeCascadeTarget) calledWithQueryValue(key, value string) bool {
 // mirroring how apiary-service verifies tokens against auth-service and
 // cascades a delete in production, just with throwaway stand-ins instead
 // of the real downstream services.
+type fakeSubscriptionTarget struct {
+	mu          sync.Mutex
+	entitlement string
+	errStatus   int
+}
+
+func newFakeSubscriptionTarget() *fakeSubscriptionTarget {
+	return &fakeSubscriptionTarget{entitlement: "pro"}
+}
+
+func (f *fakeSubscriptionTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.errStatus != 0 {
+		w.WriteHeader(f.errStatus)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{"entitlement": f.entitlement})
+}
+
+func (f *fakeSubscriptionTarget) setEntitlement(ent string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.entitlement = ent
+}
+
+// testStack wires a full router against a real PostgreSQL database (every
+// write scoped to a transaction rolled back at the end of the test), a
+// real JWKS server, and fake hive-service/media-service - exactly
+// mirroring how apiary-service verifies tokens against auth-service and
+// cascades a delete in production, just with throwaway stand-ins instead
+// of the real downstream services.
 type testStack struct {
 	server     *httptest.Server
 	hives      *fakeCascadeTarget
 	hiveServer *httptest.Server
 	media      *fakeCascadeTarget
+	subs       *fakeSubscriptionTarget
+	subServer  *httptest.Server
 	priv       ed25519.PrivateKey
 }
 
@@ -200,10 +238,15 @@ func newTestStack(t *testing.T) *testStack {
 	mediaServer := httptest.NewServer(media)
 	t.Cleanup(mediaServer.Close)
 
+	subs := newFakeSubscriptionTarget()
+	subServer := httptest.NewServer(subs)
+	t.Cleanup(subServer.Close)
+
 	apiaryRepo := repopostgres.NewApiaryRepository(tx)
 	hiveDeleter := hiveclient.New(hiveServer.URL)
 	mediaDeleter := mediaclient.New(mediaServer.URL)
-	apiaryService := appapiary.NewService(apiaryRepo, hiveDeleter, mediaDeleter)
+	subClient := subscriptionclient.New(subServer.URL)
+	apiaryService := appapiary.NewService(apiaryRepo, hiveDeleter, mediaDeleter, subClient)
 	log := logger.New("development", "error")
 	handler := apiaryhttp.NewHandler(apiaryService, log, "http://localhost:8080")
 
@@ -212,7 +255,15 @@ func newTestStack(t *testing.T) *testStack {
 	srv := httptest.NewServer(router)
 	t.Cleanup(srv.Close)
 
-	return &testStack{server: srv, hives: hives, hiveServer: hiveServer, media: media, priv: priv}
+	return &testStack{
+		server:     srv,
+		hives:      hives,
+		hiveServer: hiveServer,
+		media:      media,
+		subs:       subs,
+		subServer:  subServer,
+		priv:       priv,
+	}
 }
 
 // tokenFor signs a valid access token for userID, exactly as auth-service
@@ -718,5 +769,55 @@ func TestApiaryFlow_CreateWithImages_RejectsForeignMedia(t *testing.T) {
 	decodeJSON(t, resp, &list)
 	if len(list.Items) != 0 {
 		t.Fatalf("an apiary was persisted despite a rejected image: %v", list.Items)
+	}
+}
+
+func TestApiaryFlow_FreeTierLimit(t *testing.T) {
+	stack := newTestStack(t)
+	stack.subs.setEntitlement("free")
+
+	userID := uuid.New()
+	token := stack.tokenFor(t, userID)
+
+	// First apiary succeeds
+	resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{
+		"name": "First apiary",
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("first apiary create: status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	// Second apiary fails with 403 Forbidden and apiary_limit_reached
+	resp = stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{
+		"name": "Second apiary",
+	})
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("second apiary create: status = %d, want %d", resp.StatusCode, http.StatusForbidden)
+	}
+
+	var errBody struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	decodeJSON(t, resp, &errBody)
+	if errBody.Error.Code != "apiary_limit_reached" {
+		t.Fatalf("error code = %q, want %q", errBody.Error.Code, "apiary_limit_reached")
+	}
+}
+
+func TestApiaryFlow_SubscriptionServiceUnreachable(t *testing.T) {
+	stack := newTestStack(t)
+	stack.subServer.Close() // simulate subscription-service down
+
+	userID := uuid.New()
+	token := stack.tokenFor(t, userID)
+
+	resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{
+		"name": "Should fail closed",
+	})
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("create with subscription down: status = %d, want %d", resp.StatusCode, http.StatusInternalServerError)
 	}
 }

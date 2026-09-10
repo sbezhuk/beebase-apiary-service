@@ -3,6 +3,7 @@ package apiary_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"testing"
@@ -28,6 +29,37 @@ func newFakeRepo() *fakeRepo {
 func (f *fakeRepo) Create(_ context.Context, a *apiary.Apiary) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	cp := *a
+	f.byID[a.ID] = &cp
+	return nil
+}
+
+func (f *fakeRepo) CountByUser(_ context.Context, userID uuid.UUID) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	count := 0
+	for _, a := range f.byID {
+		if a.UserID == userID && a.DeletedAt == nil {
+			count++
+		}
+	}
+	return count, nil
+}
+
+func (f *fakeRepo) CreateWithLimit(ctx context.Context, a *apiary.Apiary, maxCount int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if maxCount > 0 {
+		count := 0
+		for _, existing := range f.byID {
+			if existing.UserID == a.UserID && existing.DeletedAt == nil {
+				count++
+			}
+		}
+		if count >= maxCount {
+			return apiary.ErrLimitReached
+		}
+	}
 	cp := *a
 	f.byID[a.ID] = &cp
 	return nil
@@ -229,11 +261,27 @@ func (f *fakeMediaClient) deleteCallCount() int {
 	return len(f.deletedIDs)
 }
 
+type fakeSubscriptionClient struct {
+	entitlement string
+	err         error
+}
+
+func newFakeSubscriptionClient() *fakeSubscriptionClient {
+	return &fakeSubscriptionClient{entitlement: appapiary.EntitlementPro}
+}
+
+func (f *fakeSubscriptionClient) GetEntitlement(_ context.Context, _ string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.entitlement, nil
+}
+
 // newService builds a Service backed by repo, with always-succeeding fake
-// hive/media clients - the right default for every test that isn't
-// specifically exercising the delete cascade or images.
+// hive/media/subscription clients - the right default for every test that isn't
+// specifically exercising the delete cascade, images, or entitlement limits.
 func newService(repo *fakeRepo) *appapiary.Service {
-	return appapiary.NewService(repo, newFakeHiveDeleter(), newFakeMediaClient())
+	return appapiary.NewService(repo, newFakeHiveDeleter(), newFakeMediaClient(), newFakeSubscriptionClient())
 }
 
 // --- tests ---
@@ -301,7 +349,7 @@ func TestCreate_WithoutCoordinates(t *testing.T) {
 func TestCreate_WithImages_Success(t *testing.T) {
 	repo := newFakeRepo()
 	media := newFakeMediaClient()
-	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
 	userID := uuid.New()
 	photo1 := uuid.New()
 	photo2 := uuid.New()
@@ -334,7 +382,7 @@ func TestCreate_WithImages_Success(t *testing.T) {
 func TestCreate_WithImages_RejectsForeignMedia(t *testing.T) {
 	repo := newFakeRepo()
 	media := newFakeMediaClient() // foreign is deliberately never own()'d
-	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
 	userID := uuid.New()
 	foreign := uuid.New()
 
@@ -555,7 +603,7 @@ func TestUpdate_WrongOwner_ReturnsNotFound(t *testing.T) {
 func TestUpdate_ImagesNil_LeavesImagesUntouched(t *testing.T) {
 	repo := newFakeRepo()
 	media := newFakeMediaClient()
-	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
 	userID := uuid.New()
 	mediaID := uuid.New()
 	media.own(mediaID)
@@ -586,7 +634,7 @@ func TestUpdate_ImagesNil_LeavesImagesUntouched(t *testing.T) {
 func TestUpdate_ImagesEmpty_ClearsReferencesWithoutDeletingFiles(t *testing.T) {
 	repo := newFakeRepo()
 	media := newFakeMediaClient()
-	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
 	userID := uuid.New()
 	mediaID := uuid.New()
 	media.own(mediaID)
@@ -622,7 +670,7 @@ func TestUpdate_ImagesEmpty_ClearsReferencesWithoutDeletingFiles(t *testing.T) {
 func TestUpdate_ImagesReplacedWholesale(t *testing.T) {
 	repo := newFakeRepo()
 	media := newFakeMediaClient()
-	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
 	userID := uuid.New()
 	keep := uuid.New()
 	drop := uuid.New()
@@ -658,7 +706,7 @@ func TestUpdate_ImagesReplacedWholesale(t *testing.T) {
 func TestUpdate_ImagesRejectsForeignMedia(t *testing.T) {
 	repo := newFakeRepo()
 	media := newFakeMediaClient() // foreign is deliberately never own()'d
-	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
 	userID := uuid.New()
 	kept := uuid.New()
 	media.own(kept)
@@ -699,7 +747,7 @@ func TestUpdate_ImagesRejectsForeignMedia(t *testing.T) {
 func TestUpdate_ImagesAcceptsNewlyOwnedMedia(t *testing.T) {
 	repo := newFakeRepo()
 	media := newFakeMediaClient()
-	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media)
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
 	userID := uuid.New()
 
 	created, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Home apiary"})
@@ -769,7 +817,7 @@ func TestDelete_CascadesHivesAndImagesBeforeApiary(t *testing.T) {
 	repo := newFakeRepo()
 	hives := newFakeHiveDeleter()
 	media := newFakeMediaClient()
-	svc := appapiary.NewService(repo, hives, media)
+	svc := appapiary.NewService(repo, hives, media, newFakeSubscriptionClient())
 	userID := uuid.New()
 	photo := uuid.New()
 	media.own(photo)
@@ -806,7 +854,7 @@ func TestDelete_SkipsMediaCallWhenNoImages(t *testing.T) {
 	hives := newFakeHiveDeleter()
 	media := newFakeMediaClient()
 	media.failDeleteWith(errors.New("should never be called"))
-	svc := appapiary.NewService(repo, hives, media)
+	svc := appapiary.NewService(repo, hives, media, newFakeSubscriptionClient())
 	userID := uuid.New()
 
 	created, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "No photos"})
@@ -831,7 +879,7 @@ func TestDelete_AbortsOnHiveCascadeFailure_ApiarySurvives(t *testing.T) {
 	repo := newFakeRepo()
 	hives := newFakeHiveDeleter()
 	media := newFakeMediaClient()
-	svc := appapiary.NewService(repo, hives, media)
+	svc := appapiary.NewService(repo, hives, media, newFakeSubscriptionClient())
 	userID := uuid.New()
 	photo := uuid.New()
 	media.own(photo)
@@ -870,7 +918,7 @@ func TestDelete_AbortsOnMediaDeleteFailure_ApiarySurvives(t *testing.T) {
 	photo := uuid.New()
 	media.own(photo)
 
-	svc := appapiary.NewService(repo, hives, media)
+	svc := appapiary.NewService(repo, hives, media, newFakeSubscriptionClient())
 	created, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
 		Name:   "Survives",
 		Images: []uuid.UUID{photo},
@@ -900,7 +948,7 @@ func TestDeleteAllByUser_CascadesEveryApiary(t *testing.T) {
 	repo := newFakeRepo()
 	hives := newFakeHiveDeleter()
 	media := newFakeMediaClient()
-	svc := appapiary.NewService(repo, hives, media)
+	svc := appapiary.NewService(repo, hives, media, newFakeSubscriptionClient())
 	userID := uuid.New()
 	other := uuid.New()
 	photo := uuid.New()
@@ -952,7 +1000,7 @@ func TestDeleteAllByUser_NoApiaries_Noop(t *testing.T) {
 	hives := newFakeHiveDeleter()
 	media := newFakeMediaClient()
 	media.failDeleteWith(errors.New("should never be called"))
-	svc := appapiary.NewService(repo, hives, media)
+	svc := appapiary.NewService(repo, hives, media, newFakeSubscriptionClient())
 	userID := uuid.New()
 
 	if err := svc.DeleteAllByUser(context.Background(), userID, "token"); err != nil {
@@ -971,7 +1019,7 @@ func TestDeleteAllByUser_AbortsOnFirstFailure_RemainingApiariesSurvive(t *testin
 	repo := newFakeRepo()
 	hives := newFakeHiveDeleter()
 	media := newFakeMediaClient()
-	svc := appapiary.NewService(repo, hives, media)
+	svc := appapiary.NewService(repo, hives, media, newFakeSubscriptionClient())
 	userID := uuid.New()
 
 	a1, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "First"})
@@ -995,5 +1043,89 @@ func TestDeleteAllByUser_AbortsOnFirstFailure_RemainingApiariesSurvive(t *testin
 	}
 	if _, err := svc.Get(context.Background(), userID, a2.ID); err != nil {
 		t.Fatalf("a2, not yet reached, should survive: %v", err)
+	}
+}
+
+func TestCreate_FreeTier_FirstApiarySucceeds(t *testing.T) {
+	repo := newFakeRepo()
+	subs := &fakeSubscriptionClient{entitlement: appapiary.EntitlementFree}
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), newFakeMediaClient(), subs)
+	userID := uuid.New()
+
+	a, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name: "First Free Apiary",
+	})
+	if err != nil {
+		t.Fatalf("expected first apiary creation to succeed for free tier, got: %v", err)
+	}
+	if a == nil || a.Name != "First Free Apiary" {
+		t.Fatalf("unexpected apiary returned: %+v", a)
+	}
+}
+
+func TestCreate_FreeTier_SecondApiaryRejected(t *testing.T) {
+	repo := newFakeRepo()
+	subs := &fakeSubscriptionClient{entitlement: appapiary.EntitlementFree}
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), newFakeMediaClient(), subs)
+	userID := uuid.New()
+
+	_, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name: "First Apiary",
+	})
+	if err != nil {
+		t.Fatalf("first creation failed: %v", err)
+	}
+
+	_, err = svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name: "Second Apiary",
+	})
+	if !errors.Is(err, appapiary.ErrApiaryLimitReached) {
+		t.Fatalf("expected ErrApiaryLimitReached for second apiary on free tier, got: %v", err)
+	}
+}
+
+func TestCreate_ProTier_MultipleApiariesSucceed(t *testing.T) {
+	repo := newFakeRepo()
+	subs := &fakeSubscriptionClient{entitlement: appapiary.EntitlementPro}
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), newFakeMediaClient(), subs)
+	userID := uuid.New()
+
+	for i := 1; i <= 5; i++ {
+		_, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+			Name: fmt.Sprintf("Pro Apiary %d", i),
+		})
+		if err != nil {
+			t.Fatalf("creation %d failed for pro user: %v", i, err)
+		}
+	}
+
+	count, err := repo.CountByUser(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("count failed: %v", err)
+	}
+	if count != 5 {
+		t.Fatalf("expected 5 apiaries, got %d", count)
+	}
+}
+
+func TestCreate_SubscriptionLookupFailure_FailsClosed(t *testing.T) {
+	repo := newFakeRepo()
+	subs := &fakeSubscriptionClient{err: errors.New("subscription-service connection refused")}
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), newFakeMediaClient(), subs)
+	userID := uuid.New()
+
+	_, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name: "Attempted Apiary",
+	})
+	if err == nil {
+		t.Fatal("expected creation to fail when subscription-service is unreachable")
+	}
+	if errors.Is(err, appapiary.ErrApiaryLimitReached) {
+		t.Fatal("should not falsely report ErrApiaryLimitReached when subscription-service fails")
+	}
+
+	count, _ := repo.CountByUser(context.Background(), userID)
+	if count != 0 {
+		t.Fatalf("no apiary should have been created on lookup failure, got count %d", count)
 	}
 }

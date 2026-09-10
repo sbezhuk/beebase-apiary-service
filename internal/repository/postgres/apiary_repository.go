@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sbezhuk/beebase-apiary-service/internal/domain/apiary"
 	"github.com/sbezhuk/beebase-common/pagination"
@@ -42,6 +43,81 @@ func (r *ApiaryRepository) Create(ctx context.Context, a *apiary.Apiary) error {
 	}
 
 	return nil
+}
+
+// CountByUser returns the total number of non-deleted apiaries owned by userID.
+func (r *ApiaryRepository) CountByUser(ctx context.Context, userID uuid.UUID) (int, error) {
+	const q = `
+		SELECT count(*)
+		FROM apiaries
+		WHERE user_id = $1 AND deleted_at IS NULL
+	`
+	var count int
+	if err := r.db.QueryRow(ctx, q, userID).Scan(&count); err != nil {
+		return 0, fmt.Errorf("postgres: count apiaries: %w", err)
+	}
+	return count, nil
+}
+
+// CreateWithLimit creates a new apiary, but only if the user currently owns
+// fewer than maxCount active apiaries. If maxCount <= 0, creation is unlimited.
+// Uses a transaction-scoped advisory lock on the user ID to prevent race conditions.
+func (r *ApiaryRepository) CreateWithLimit(ctx context.Context, a *apiary.Apiary, maxCount int) error {
+	if maxCount <= 0 {
+		return r.Create(ctx, a)
+	}
+
+	pool, isPool := r.db.(*pgxpool.Pool)
+	if isPool {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("postgres: begin tx: %w", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+
+		const lockQ = `SELECT pg_advisory_xact_lock(hashtext('apiary_limit:' || $1::text))`
+		if _, err := tx.Exec(ctx, lockQ, a.UserID); err != nil {
+			return fmt.Errorf("postgres: acquire advisory lock: %w", err)
+		}
+
+		const countQ = `SELECT count(*) FROM apiaries WHERE user_id = $1 AND deleted_at IS NULL`
+		var count int
+		if err := tx.QueryRow(ctx, countQ, a.UserID).Scan(&count); err != nil {
+			return fmt.Errorf("postgres: count apiaries: %w", err)
+		}
+		if count >= maxCount {
+			return apiary.ErrLimitReached
+		}
+
+		const insertQ = `
+			INSERT INTO apiaries (id, user_id, name, location, description, lat, lon, images, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`
+		if _, err := tx.Exec(ctx, insertQ, a.ID, a.UserID, a.Name, a.Location, a.Description, a.Lat, a.Lon, images(a.Images), a.CreatedAt, a.UpdatedAt); err != nil {
+			return fmt.Errorf("postgres: create apiary: %w", err)
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("postgres: commit tx: %w", err)
+		}
+		return nil
+	}
+
+	const lockQ = `SELECT pg_advisory_xact_lock(hashtext('apiary_limit:' || $1::text))`
+	if _, err := r.db.Exec(ctx, lockQ, a.UserID); err != nil {
+		return fmt.Errorf("postgres: acquire advisory lock: %w", err)
+	}
+
+	const countQ = `SELECT count(*) FROM apiaries WHERE user_id = $1 AND deleted_at IS NULL`
+	var count int
+	if err := r.db.QueryRow(ctx, countQ, a.UserID).Scan(&count); err != nil {
+		return fmt.Errorf("postgres: count apiaries: %w", err)
+	}
+	if count >= maxCount {
+		return apiary.ErrLimitReached
+	}
+
+	return r.Create(ctx, a)
 }
 
 func (r *ApiaryRepository) GetByID(ctx context.Context, userID, apiaryID uuid.UUID) (*apiary.Apiary, error) {
