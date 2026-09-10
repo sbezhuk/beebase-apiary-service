@@ -11,3 +11,7 @@ var ErrNotFound = errors.New("apiary not found")
 // ErrLimitReached is returned by Repository.CreateWithLimit when the user's
 // active apiary count already meets or exceeds the specified limit.
 var ErrLimitReached = errors.New("apiary limit reached")
+
+// ErrNameTaken is returned when a user already has an active apiary with
+// the same name.
+var ErrNameTaken = errors.New("apiary name taken")

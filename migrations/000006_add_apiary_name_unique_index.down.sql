@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_apiaries_user_id_name_unique_active;

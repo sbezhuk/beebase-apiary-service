@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sbezhuk/beebase-apiary-service/internal/domain/apiary"
@@ -17,6 +18,10 @@ import (
 // search term to be applied. Shorter terms produce noisy results and put
 // unnecessary load on the database.
 const minSearchLength = 3
+
+// uniqueViolationCode is PostgreSQL's SQLSTATE for a unique constraint
+// violation.
+const uniqueViolationCode = "23505"
 
 // ApiaryRepository implements domain/apiary.Repository against
 // PostgreSQL. Every method scopes its query by user_id, so a user can
@@ -39,6 +44,9 @@ func (r *ApiaryRepository) Create(ctx context.Context, a *apiary.Apiary) error {
 
 	_, err := r.db.Exec(ctx, q, a.ID, a.UserID, a.Name, a.Location, a.Description, a.Lat, a.Lon, images(a.Images), a.CreatedAt, a.UpdatedAt)
 	if err != nil {
+		if isUniqueNameViolation(err) {
+			return apiary.ErrNameTaken
+		}
 		return fmt.Errorf("postgres: create apiary: %w", err)
 	}
 
@@ -94,6 +102,9 @@ func (r *ApiaryRepository) CreateWithLimit(ctx context.Context, a *apiary.Apiary
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		`
 		if _, err := tx.Exec(ctx, insertQ, a.ID, a.UserID, a.Name, a.Location, a.Description, a.Lat, a.Lon, images(a.Images), a.CreatedAt, a.UpdatedAt); err != nil {
+			if isUniqueNameViolation(err) {
+				return apiary.ErrNameTaken
+			}
 			return fmt.Errorf("postgres: create apiary: %w", err)
 		}
 
@@ -240,6 +251,9 @@ func (r *ApiaryRepository) Update(ctx context.Context, a *apiary.Apiary) error {
 
 	tag, err := r.db.Exec(ctx, q, a.Name, a.Location, a.Description, a.Lat, a.Lon, images(a.Images), a.UpdatedAt, a.ID, a.UserID)
 	if err != nil {
+		if isUniqueNameViolation(err) {
+			return apiary.ErrNameTaken
+		}
 		return fmt.Errorf("postgres: update apiary: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
@@ -247,6 +261,13 @@ func (r *ApiaryRepository) Update(ctx context.Context, a *apiary.Apiary) error {
 	}
 
 	return nil
+}
+
+func isUniqueNameViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == uniqueViolationCode &&
+		pgErr.ConstraintName == "idx_apiaries_user_id_name_unique_active"
 }
 
 // images coalesces a nil slice to an empty one - the images column is

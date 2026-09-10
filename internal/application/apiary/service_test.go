@@ -29,6 +29,9 @@ func newFakeRepo() *fakeRepo {
 func (f *fakeRepo) Create(_ context.Context, a *apiary.Apiary) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.hasActiveNameLocked(a.UserID, a.Name, a.ID) {
+		return apiary.ErrNameTaken
+	}
 	cp := *a
 	f.byID[a.ID] = &cp
 	return nil
@@ -49,6 +52,9 @@ func (f *fakeRepo) CountByUser(_ context.Context, userID uuid.UUID) (int, error)
 func (f *fakeRepo) CreateWithLimit(ctx context.Context, a *apiary.Apiary, maxCount int) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.hasActiveNameLocked(a.UserID, a.Name, a.ID) {
+		return apiary.ErrNameTaken
+	}
 	if maxCount > 0 {
 		count := 0
 		for _, existing := range f.byID {
@@ -132,9 +138,21 @@ func (f *fakeRepo) Update(_ context.Context, a *apiary.Apiary) error {
 	if !ok || existing.UserID != a.UserID || existing.DeletedAt != nil {
 		return apiary.ErrNotFound
 	}
+	if f.hasActiveNameLocked(a.UserID, a.Name, a.ID) {
+		return apiary.ErrNameTaken
+	}
 	cp := *a
 	f.byID[a.ID] = &cp
 	return nil
+}
+
+func (f *fakeRepo) hasActiveNameLocked(userID uuid.UUID, name string, excludeID uuid.UUID) bool {
+	for id, existing := range f.byID {
+		if id != excludeID && existing.UserID == userID && existing.DeletedAt == nil && existing.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func (f *fakeRepo) HardDelete(_ context.Context, userID, apiaryID uuid.UUID) error {
@@ -284,6 +302,13 @@ func newService(repo *fakeRepo) *appapiary.Service {
 	return appapiary.NewService(repo, newFakeHiveDeleter(), newFakeMediaClient(), newFakeSubscriptionClient())
 }
 
+func mustCreate(t *testing.T, repo *fakeRepo, a *apiary.Apiary) {
+	t.Helper()
+	if err := repo.Create(context.Background(), a); err != nil {
+		t.Fatalf("seed apiary: %v", err)
+	}
+}
+
 // --- tests ---
 
 func TestCreate_Success(t *testing.T) {
@@ -306,6 +331,32 @@ func TestCreate_Success(t *testing.T) {
 	}
 	if len(a.Images) != 0 {
 		t.Errorf("Images = %v, want empty", a.Images)
+	}
+}
+
+func TestCreate_DuplicateNameForSameUser_ReturnsNameTaken(t *testing.T) {
+	svc := newService(newFakeRepo())
+	userID := uuid.New()
+
+	_, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Home apiary"})
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+
+	_, err = svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Home apiary"})
+	if !errors.Is(err, apiary.ErrNameTaken) {
+		t.Fatalf("second Create: got %v, want ErrNameTaken", err)
+	}
+}
+
+func TestCreate_DuplicateNameForDifferentUsersSucceeds(t *testing.T) {
+	svc := newService(newFakeRepo())
+
+	if _, err := svc.Create(context.Background(), uuid.New(), "token", appapiary.CreateInput{Name: "Shared name"}); err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	if _, err := svc.Create(context.Background(), uuid.New(), "token", appapiary.CreateInput{Name: "Shared name"}); err != nil {
+		t.Fatalf("same name for another user should succeed: %v", err)
 	}
 }
 
@@ -491,7 +542,7 @@ func TestList_Pagination(t *testing.T) {
 	userID := uuid.New()
 
 	for i := 0; i < 5; i++ {
-		if _, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "A"}); err != nil {
+		if _, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: fmt.Sprintf("A-%d", i)}); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 	}
@@ -568,6 +619,40 @@ func TestUpdate_Success(t *testing.T) {
 	}
 	if !updated.UpdatedAt.After(created.UpdatedAt) && updated.UpdatedAt != created.UpdatedAt {
 		t.Errorf("UpdatedAt did not advance")
+	}
+}
+
+func TestUpdate_UnchangedNameRemainsValid(t *testing.T) {
+	repo := newFakeRepo()
+	svc := newService(repo)
+	userID := uuid.New()
+	created := apiary.New(userID, "Home apiary", "yard", "")
+	mustCreate(t, repo, created)
+
+	updated, err := svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:     "Home apiary",
+		Location: "front yard",
+	})
+	if err != nil {
+		t.Fatalf("Update with unchanged name: %v", err)
+	}
+	if updated.Name != "Home apiary" || updated.Location != "front yard" {
+		t.Fatalf("updated = %+v, want unchanged name with new location", updated)
+	}
+}
+
+func TestUpdate_DuplicateNameForSameUser_ReturnsNameTaken(t *testing.T) {
+	repo := newFakeRepo()
+	svc := newService(repo)
+	userID := uuid.New()
+	first := apiary.New(userID, "First", "", "")
+	second := apiary.New(userID, "Second", "", "")
+	mustCreate(t, repo, first)
+	mustCreate(t, repo, second)
+
+	_, err := svc.Update(context.Background(), userID, "token", second.ID, appapiary.UpdateInput{Name: "First"})
+	if !errors.Is(err, apiary.ErrNameTaken) {
+		t.Fatalf("Update duplicate name: got %v, want ErrNameTaken", err)
 	}
 }
 

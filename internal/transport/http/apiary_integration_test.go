@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -460,6 +461,40 @@ func TestApiaryFlow_CannotAccessAnotherUsersApiary(t *testing.T) {
 	}
 }
 
+func TestApiaryFlow_NameUniqueness(t *testing.T) {
+	stack := newTestStack(t)
+	token := stack.tokenFor(t, uuid.New())
+
+	resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{"name": "Home apiary"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create first: status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var first apiaryhttp.Response
+	decodeJSON(t, resp, &first)
+
+	resp = stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{"name": "Home apiary"})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("create duplicate: status = %d, want %d", resp.StatusCode, http.StatusConflict)
+	}
+	var errBody struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	decodeJSON(t, resp, &errBody)
+	if errBody.Error.Code != apiaryhttp.CodeApiaryNameTaken {
+		t.Fatalf("duplicate code = %q, want %q", errBody.Error.Code, apiaryhttp.CodeApiaryNameTaken)
+	}
+
+	resp = stack.request(t, http.MethodPut, "/api/v1/apiaries/"+first.ID.String(), token, map[string]string{
+		"name":     "Home apiary",
+		"location": "unchanged-name update",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update unchanged name: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+}
+
 func TestApiaryFlow_WithoutTokenIsUnauthorized(t *testing.T) {
 	stack := newTestStack(t)
 
@@ -495,7 +530,7 @@ func TestApiaryFlow_ListPagination(t *testing.T) {
 	token := stack.tokenFor(t, userID)
 
 	for i := 0; i < 3; i++ {
-		resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{"name": "A"})
+		resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{"name": fmt.Sprintf("A-%d", i)})
 		if resp.StatusCode != http.StatusCreated {
 			t.Fatalf("create %d: status = %d, want %d", i, resp.StatusCode, http.StatusCreated)
 		}
