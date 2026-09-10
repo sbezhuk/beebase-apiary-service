@@ -482,8 +482,8 @@ func TestApiaryFlow_NameUniqueness(t *testing.T) {
 		} `json:"error"`
 	}
 	decodeJSON(t, resp, &errBody)
-	if errBody.Error.Code != apiaryhttp.CodeApiaryNameTaken {
-		t.Fatalf("duplicate code = %q, want %q", errBody.Error.Code, apiaryhttp.CodeApiaryNameTaken)
+	if errBody.Error.Code != apiaryhttp.CodeApiaryNameExists {
+		t.Fatalf("duplicate code = %q, want %q", errBody.Error.Code, apiaryhttp.CodeApiaryNameExists)
 	}
 
 	resp = stack.request(t, http.MethodPut, "/api/v1/apiaries/"+first.ID.String(), token, map[string]string{

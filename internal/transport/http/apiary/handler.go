@@ -29,7 +29,7 @@ const (
 	CodeImageNotFound      = "image_not_found"
 	CodeInvalidSearch      = "invalid_search"
 	CodeApiaryLimitReached = "apiary_limit_reached"
-	CodeApiaryNameTaken    = "apiary_name_taken"
+	CodeApiaryNameExists   = "apiary_name_exists"
 )
 
 const minSearchLength = 3
@@ -268,7 +268,7 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, appapiary.ErrApiaryLimitReached):
 		httpx.WriteError(w, http.StatusForbidden, CodeApiaryLimitReached, "free tier allows a maximum of 1 apiary")
 	case errors.Is(err, apiary.ErrNameTaken):
-		httpx.WriteError(w, http.StatusConflict, CodeApiaryNameTaken, "apiary name already exists")
+		httpx.WriteError(w, http.StatusConflict, CodeApiaryNameExists, "apiary name already exists")
 	default:
 		httpx.WriteInternalError(w, h.log, err)
 	}
