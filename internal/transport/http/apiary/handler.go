@@ -30,6 +30,7 @@ const (
 	CodeInvalidSearch      = "invalid_search"
 	CodeApiaryLimitReached = "apiary_limit_reached"
 	CodeApiaryNameExists   = "apiary_name_exists"
+	CodeMediaLimitReached  = "media_limit_reached"
 )
 
 const minSearchLength = 3
@@ -267,6 +268,8 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteValidationError(w, map[string]string{"images": CodeImageNotFound})
 	case errors.Is(err, appapiary.ErrApiaryLimitReached):
 		httpx.WriteError(w, http.StatusForbidden, CodeApiaryLimitReached, "free tier allows a maximum of 1 apiary")
+	case errors.Is(err, appapiary.ErrMediaLimitReached):
+		httpx.WriteError(w, http.StatusBadRequest, CodeMediaLimitReached, "maximum 5 photos allowed")
 	case errors.Is(err, apiary.ErrNameTaken):
 		httpx.WriteError(w, http.StatusConflict, CodeApiaryNameExists, "apiary name already exists")
 	default:

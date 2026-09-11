@@ -34,6 +34,12 @@ func TestWriteServiceError(t *testing.T) {
 			wantCode:   CodeApiaryLimitReached,
 		},
 		{
+			name:       "media limit reached",
+			err:        appapiary.ErrMediaLimitReached,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   CodeMediaLimitReached,
+		},
+		{
 			name:       "apiary name exists",
 			err:        apiary.ErrNameTaken,
 			wantStatus: http.StatusConflict,

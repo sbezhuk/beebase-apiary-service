@@ -41,6 +41,9 @@ const (
 
 	// FreeMaxApiaries is the maximum number of apiaries a free-tier user can own.
 	FreeMaxApiaries = 1
+
+	// MaxMediaAttachments is the maximum number of media attachments allowed per apiary.
+	MaxMediaAttachments = 5
 )
 
 // EntitlementResolver resolves the subscription entitlement for a user by

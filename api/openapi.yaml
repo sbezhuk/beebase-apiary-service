@@ -90,10 +90,13 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ApiaryResponse" }
         "400":
-          description: Request failed validation.
+          description: Request failed validation, or media limit reached.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/ErrorResponse" }
         "401":
           description: Missing, invalid, or expired access token.
           content:
@@ -209,11 +212,14 @@ paths:
               schema: { $ref: "#/components/schemas/ApiaryResponse" }
         "400":
           description: >
-            apiaryId is not a valid UUID, the request failed validation, or
-            images contains an id that doesn't belong to the caller.
+            apiaryId is not a valid UUID, the request failed validation,
+            media limit reached, or images contains an id that doesn't belong to the caller.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/ValidationErrorResponse" }
+                  - { $ref: "#/components/schemas/ErrorResponse" }
         "401":
           description: Missing, invalid, or expired access token.
           content:
@@ -285,12 +291,13 @@ components:
           description: Longitude of the apiary, in decimal degrees.
         images:
           type: array
+          maxItems: 5
           items: { type: string, format: uuid }
           description: >
             Media IDs (returned by media-service's upload endpoint) to
             reference immediately. Each must belong to the caller; omit
             this field (or send an empty array) to create an apiary with
-            no photos.
+            no photos. Maximum 5 photos allowed.
 
     ApiaryUpdateRequest:
       type: object
@@ -315,14 +322,15 @@ components:
           description: Longitude of the apiary, in decimal degrees.
         images:
           type: array
+          maxItems: 5
           items: { type: string, format: uuid }
           description: >
             The desired final set of media IDs (returned by media-service's
             upload endpoint) referenced by this apiary. Omit this field (or
             send null) to leave the current set untouched; send an array
             (including an empty one) to replace it wholesale. Each id must
-            belong to the caller. Dropping an id only removes the
-            reference - it does not delete the underlying file.
+            belong to the caller. Maximum 5 photos allowed. Dropping an id
+            only removes the reference - it does not delete the underlying file.
 
     ApiaryImage:
       type: object
@@ -390,6 +398,7 @@ components:
                 - invalid_access_token
                 - invalid_body
                 - internal_error
+                - media_limit_reached
               example: apiary_not_found
             message: { type: string, example: apiary not found }
 

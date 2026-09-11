@@ -855,6 +855,302 @@ func TestUpdate_ImagesAcceptsNewlyOwnedMedia(t *testing.T) {
 	}
 }
 
+func TestCreate_WithImages_MaxLimit_Success(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	photos := make([]uuid.UUID, 5)
+	for i := range photos {
+		photos[i] = uuid.New()
+		media.own(photos[i])
+	}
+
+	a, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name:   "Apiary 5 photos",
+		Images: photos,
+	})
+	if err != nil {
+		t.Fatalf("Create with 5 photos failed: %v", err)
+	}
+	if len(a.Images) != 5 {
+		t.Fatalf("Images length = %d, want 5", len(a.Images))
+	}
+}
+
+func TestCreate_WithImages_ExceedsLimit_ReturnsMediaLimitReached(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	photos := make([]uuid.UUID, 6)
+	for i := range photos {
+		photos[i] = uuid.New()
+		media.own(photos[i])
+	}
+
+	_, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name:   "Apiary 6 photos",
+		Images: photos,
+	})
+	if !errors.Is(err, appapiary.ErrMediaLimitReached) {
+		t.Fatalf("expected ErrMediaLimitReached for 6 photos, got: %v", err)
+	}
+}
+
+func TestCreate_WithImages_DuplicatesCountTowardUniqueLimit(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	photos := make([]uuid.UUID, 5)
+	for i := range photos {
+		photos[i] = uuid.New()
+		media.own(photos[i])
+	}
+	// 6 entries, but only 5 unique
+	withDupes := append(photos, photos[0])
+
+	a, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name:   "Apiary 5 unique photos with dupe",
+		Images: withDupes,
+	})
+	if err != nil {
+		t.Fatalf("Create with 5 unique photos (6 with dupes) failed: %v", err)
+	}
+	if len(a.Images) != 5 {
+		t.Fatalf("Images length = %d, want 5", len(a.Images))
+	}
+}
+
+func TestUpdate_WithImages_MaxLimit_Success(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Apiary"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	photos := make([]uuid.UUID, 5)
+	for i := range photos {
+		photos[i] = uuid.New()
+		media.own(photos[i])
+	}
+
+	updated, err := svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:   "Apiary",
+		Images: &photos,
+	})
+	if err != nil {
+		t.Fatalf("Update with 5 photos failed: %v", err)
+	}
+	if len(updated.Images) != 5 {
+		t.Fatalf("Images length = %d, want 5", len(updated.Images))
+	}
+}
+
+func TestUpdate_WithImages_ExceedsLimit_ReturnsMediaLimitReached(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	created, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Apiary"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	photos := make([]uuid.UUID, 6)
+	for i := range photos {
+		photos[i] = uuid.New()
+		media.own(photos[i])
+	}
+
+	_, err = svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:   "Apiary",
+		Images: &photos,
+	})
+	if !errors.Is(err, appapiary.ErrMediaLimitReached) {
+		t.Fatalf("expected ErrMediaLimitReached for 6 photos on update, got: %v", err)
+	}
+}
+
+func TestUpdate_WithExistingImages_ExceedsLimit_PreservesExistingImages(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	initialPhotos := make([]uuid.UUID, 5)
+	for i := range initialPhotos {
+		initialPhotos[i] = uuid.New()
+		media.own(initialPhotos[i])
+	}
+
+	created, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name:   "Apiary with 5 photos",
+		Images: initialPhotos,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	tooManyPhotos := make([]uuid.UUID, 6)
+	for i := range tooManyPhotos {
+		tooManyPhotos[i] = uuid.New()
+		media.own(tooManyPhotos[i])
+	}
+
+	_, err = svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:   "Apiary updated name",
+		Images: &tooManyPhotos,
+	})
+	if !errors.Is(err, appapiary.ErrMediaLimitReached) {
+		t.Fatalf("expected ErrMediaLimitReached, got %v", err)
+	}
+
+	persisted, err := svc.Get(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(persisted.Images) != 5 {
+		t.Fatalf("expected 5 photos preserved, got %d", len(persisted.Images))
+	}
+	for i, id := range initialPhotos {
+		if persisted.Images[i] != id {
+			t.Fatalf("photo %d changed: got %v, want %v", i, persisted.Images[i], id)
+		}
+	}
+}
+
+func TestUpdate_WithExistingImages_NilImages_PreservesExistingImages(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	initialPhotos := make([]uuid.UUID, 5)
+	for i := range initialPhotos {
+		initialPhotos[i] = uuid.New()
+		media.own(initialPhotos[i])
+	}
+
+	created, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name:   "Apiary with 5 photos",
+		Images: initialPhotos,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	updated, err := svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:   "Renamed Apiary",
+		Images: nil,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(updated.Images) != 5 {
+		t.Fatalf("expected 5 photos preserved, got %d", len(updated.Images))
+	}
+
+	persisted, err := svc.Get(context.Background(), userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(persisted.Images) != 5 {
+		t.Fatalf("expected 5 photos in DB, got %d", len(persisted.Images))
+	}
+}
+
+func TestUpdate_WithExistingImages_ReplacesUpToLimit_Success(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaClient()
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	initialPhotos := make([]uuid.UUID, 5)
+	for i := range initialPhotos {
+		initialPhotos[i] = uuid.New()
+		media.own(initialPhotos[i])
+	}
+
+	created, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name:   "Apiary with 5 initial photos",
+		Images: initialPhotos,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	newPhotos := make([]uuid.UUID, 5)
+	for i := range newPhotos {
+		newPhotos[i] = uuid.New()
+		media.own(newPhotos[i])
+	}
+
+	updated, err := svc.Update(context.Background(), userID, "token", created.ID, appapiary.UpdateInput{
+		Name:   "Apiary with 5 replaced photos",
+		Images: &newPhotos,
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if len(updated.Images) != 5 {
+		t.Fatalf("expected 5 photos, got %d", len(updated.Images))
+	}
+	for i, id := range newPhotos {
+		if updated.Images[i] != id {
+			t.Fatalf("photo %d mismatch: got %v, want %v", i, updated.Images[i], id)
+		}
+	}
+}
+
+func TestMediaLimit_IndependentPerApiary(t *testing.T) {
+	repo := newFakeRepo()
+	media := newFakeMediaClient()
+	subs := newFakeSubscriptionClient() // defaults to Pro
+	svc := appapiary.NewService(repo, newFakeHiveDeleter(), media, subs)
+	userID := uuid.New()
+
+	photos1 := make([]uuid.UUID, 5)
+	photos2 := make([]uuid.UUID, 5)
+	for i := range photos1 {
+		photos1[i] = uuid.New()
+		media.own(photos1[i])
+		photos2[i] = uuid.New()
+		media.own(photos2[i])
+	}
+
+	a1, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name:   "Apiary 1",
+		Images: photos1,
+	})
+	if err != nil {
+		t.Fatalf("Create apiary 1 with 5 photos: %v", err)
+	}
+
+	a2, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{
+		Name:   "Apiary 2",
+		Images: photos2,
+	})
+	if err != nil {
+		t.Fatalf("Create apiary 2 with 5 photos: %v", err)
+	}
+
+	if len(a1.Images) != 5 || len(a2.Images) != 5 {
+		t.Fatalf("expected both apiaries to have 5 photos, got %d and %d", len(a1.Images), len(a2.Images))
+	}
+}
+
+
+
 func TestDelete_Success(t *testing.T) {
 	repo := newFakeRepo()
 	svc := newService(repo)
@@ -1107,27 +1403,31 @@ func TestDeleteAllByUser_AbortsOnFirstFailure_RemainingApiariesSurvive(t *testin
 	svc := appapiary.NewService(repo, hives, media, newFakeSubscriptionClient())
 	userID := uuid.New()
 
-	a1, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "First"})
-	if err != nil {
+	if _, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "First"}); err != nil {
 		t.Fatalf("Create a1: %v", err)
 	}
-	a2, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Second"})
-	if err != nil {
+	if _, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Second"}); err != nil {
 		t.Fatalf("Create a2: %v", err)
 	}
 
+	visited, err := repo.ListAllByUser(context.Background(), userID)
+	if err != nil {
+		t.Fatalf("ListAllByUser: %v", err)
+	}
+	firstVisited, secondVisited := visited[0].ID, visited[1].ID
+
 	boom := errors.New("hive-service unreachable")
-	hives.failOn(a1.ID, boom)
+	hives.failOn(firstVisited, boom)
 
 	if err := svc.DeleteAllByUser(context.Background(), userID, "token"); !errors.Is(err, boom) {
 		t.Fatalf("DeleteAllByUser: got %v, want %v", err, boom)
 	}
 
-	if _, err := svc.Get(context.Background(), userID, a1.ID); err != nil {
-		t.Fatalf("a1 should survive its own failed cascade: %v", err)
+	if _, err := svc.Get(context.Background(), userID, firstVisited); err != nil {
+		t.Fatalf("firstVisited should survive its own failed cascade: %v", err)
 	}
-	if _, err := svc.Get(context.Background(), userID, a2.ID); err != nil {
-		t.Fatalf("a2, not yet reached, should survive: %v", err)
+	if _, err := svc.Get(context.Background(), userID, secondVisited); err != nil {
+		t.Fatalf("secondVisited, not yet reached, should survive: %v", err)
 	}
 }
 

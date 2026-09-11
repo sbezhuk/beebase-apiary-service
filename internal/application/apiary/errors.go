@@ -13,3 +13,8 @@ var ErrImageNotFound = errors.New("image not found")
 // ErrApiaryLimitReached is returned when a free-tier user attempts to create
 // more apiaries than permitted by the free plan.
 var ErrApiaryLimitReached = errors.New("apiary limit reached")
+
+// ErrMediaLimitReached is returned when an attempt is made to attach more
+// photos than permitted by the media attachment limit.
+var ErrMediaLimitReached = errors.New("media limit reached")
+

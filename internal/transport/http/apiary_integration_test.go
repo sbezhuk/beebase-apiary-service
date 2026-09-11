@@ -856,3 +856,109 @@ func TestApiaryFlow_SubscriptionServiceUnreachable(t *testing.T) {
 		t.Fatalf("create with subscription down: status = %d, want %d", resp.StatusCode, http.StatusInternalServerError)
 	}
 }
+
+func TestApiaryFlow_MediaLimit(t *testing.T) {
+	stack := newTestStack(t)
+	userID := uuid.New()
+	token := stack.tokenFor(t, userID)
+
+	photos := make([]string, 5)
+	for i := range photos {
+		id := uuid.New()
+		stack.media.own(id)
+		photos[i] = id.String()
+	}
+
+	// 1. Creating with 5 photos succeeds
+	resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]any{
+		"name":   "Apiary 5 photos",
+		"images": photos,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create with 5 photos: status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	var created apiaryhttp.Response
+	decodeJSON(t, resp, &created)
+	if len(created.Images) != 5 {
+		t.Fatalf("created images count = %d, want 5", len(created.Images))
+	}
+
+	// 2. Creating with 6 photos fails with media_limit_reached
+	photo6 := uuid.New()
+	stack.media.own(photo6)
+	tooMany := append(photos, photo6.String())
+
+	resp = stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]any{
+		"name":   "Apiary 6 photos",
+		"images": tooMany,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("create with 6 photos: status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+
+	var errBody struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	decodeJSON(t, resp, &errBody)
+	if errBody.Error.Code != "media_limit_reached" {
+		t.Fatalf("error code = %q, want %q", errBody.Error.Code, "media_limit_reached")
+	}
+
+	// 3. Updating with 5 photos succeeds
+	newPhotos := make([]string, 5)
+	for i := range newPhotos {
+		id := uuid.New()
+		stack.media.own(id)
+		newPhotos[i] = id.String()
+	}
+	resp = stack.request(t, http.MethodPut, "/api/v1/apiaries/"+created.ID.String(), token, map[string]any{
+		"name":   "Apiary replaced 5 photos",
+		"images": newPhotos,
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update with 5 photos: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// 4. Updating with 6 photos fails with media_limit_reached
+	tooManyUpdate := append(newPhotos, photo6.String())
+	resp = stack.request(t, http.MethodPut, "/api/v1/apiaries/"+created.ID.String(), token, map[string]any{
+		"name":   "Apiary 6 photos update",
+		"images": tooManyUpdate,
+	})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("update with 6 photos: status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+	decodeJSON(t, resp, &errBody)
+	if errBody.Error.Code != "media_limit_reached" {
+		t.Fatalf("update error code = %q, want %q", errBody.Error.Code, "media_limit_reached")
+	}
+
+	// Verify that the existing 5 photos remain attached after the failed update attempt
+	getResp := stack.request(t, http.MethodGet, "/api/v1/apiaries/"+created.ID.String(), token, nil)
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("get after failed update: status = %d, want %d", getResp.StatusCode, http.StatusOK)
+	}
+	var afterFailed apiaryhttp.Response
+	decodeJSON(t, getResp, &afterFailed)
+	if len(afterFailed.Images) != 5 {
+		t.Fatalf("images after failed update = %d, want 5", len(afterFailed.Images))
+	}
+
+	// 5. Updating without touching images (omitted images) retains existing 5 photos and succeeds
+	resp = stack.request(t, http.MethodPut, "/api/v1/apiaries/"+created.ID.String(), token, map[string]any{
+		"name": "Renamed Apiary without changing photos",
+	})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("update with untouched images: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	var updated apiaryhttp.Response
+	decodeJSON(t, resp, &updated)
+	if len(updated.Images) != 5 {
+		t.Fatalf("images after update = %d, want 5", len(updated.Images))
+	}
+}
+
