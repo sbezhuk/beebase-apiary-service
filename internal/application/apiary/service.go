@@ -92,9 +92,11 @@ func (s *Service) Get(ctx context.Context, userID, apiaryID uuid.UUID) (*apiary.
 
 // List returns the page of apiaries described by p, out of every apiary
 // belonging to userID. When search is non-nil its value is matched
-// case-insensitively against the apiary's name and location fields.
-func (s *Service) List(ctx context.Context, userID uuid.UUID, p pagination.Params, search *string) ([]*apiary.Apiary, int, error) {
-	return s.apiaries.ListByUser(ctx, userID, p, search)
+// case-insensitively against the apiary's name and location fields. When
+// sortOrder is non-nil ("asc" or "desc") the page is ordered by creation
+// date in that direction instead of the repository's default order.
+func (s *Service) List(ctx context.Context, userID uuid.UUID, p pagination.Params, search, sortOrder *string) ([]*apiary.Apiary, int, error) {
+	return s.apiaries.ListByUser(ctx, userID, p, search, sortOrder)
 }
 
 // Update replaces the editable fields of the apiary identified by

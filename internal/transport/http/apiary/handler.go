@@ -28,6 +28,7 @@ const (
 	CodeInvalidApiaryID    = "invalid_apiary_id"
 	CodeImageNotFound      = "image_not_found"
 	CodeInvalidSearch      = "invalid_search"
+	CodeInvalidSortOrder   = "invalid_sort_order"
 	CodeApiaryLimitReached = "apiary_limit_reached"
 	CodeApiaryNameExists   = "apiary_name_exists"
 	CodeMediaLimitReached  = "media_limit_reached"
@@ -92,12 +93,13 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	p, fields := pagination.ParseParams(r)
 	search, fields := parseSearch(r, fields)
+	sortOrder, fields := parseSortOrder(r, fields)
 	if len(fields) > 0 {
 		httpx.WriteValidationError(w, fields)
 		return
 	}
 
-	apiaries, total, err := h.service.List(r.Context(), userID, p, search)
+	apiaries, total, err := h.service.List(r.Context(), userID, p, search, sortOrder)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
@@ -116,6 +118,26 @@ func parseSearch(r *http.Request, fields map[string]string) (*string, map[string
 			fields = map[string]string{}
 		}
 		fields["search"] = CodeInvalidSearch
+		return nil, fields
+	}
+	return &s, fields
+}
+
+// parseSortOrder reads the optional "sortOrder" query parameter, which
+// requests the list be ordered by creation date instead of the endpoint's
+// default order. A missing value means "use the default order" (nil); an
+// invalid value ("asc"/"desc" are the only accepted ones) is reported as a
+// validation error the same way parseSearch reports one.
+func parseSortOrder(r *http.Request, fields map[string]string) (*string, map[string]string) {
+	s := r.URL.Query().Get("sortOrder")
+	if s == "" {
+		return nil, fields
+	}
+	if s != "asc" && s != "desc" {
+		if fields == nil {
+			fields = map[string]string{}
+		}
+		fields["sortOrder"] = CodeInvalidSortOrder
 		return nil, fields
 	}
 	return &s, fields

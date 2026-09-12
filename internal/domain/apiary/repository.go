@@ -27,8 +27,10 @@ type Repository interface {
 	// the total number of apiaries userID owns (independent of p, for
 	// computing pagination metadata). When search is non-nil its value is
 	// matched case-insensitively against name and location; a nil search
-	// means no filter.
-	ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params, search *string) (apiaries []*Apiary, total int, err error)
+	// means no filter. When sortOrder is non-nil ("asc" or "desc") the
+	// page is ordered by creation date in that direction instead of the
+	// default order; a nil sortOrder keeps the default order.
+	ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params, search, sortOrder *string) (apiaries []*Apiary, total int, err error)
 	// ListAllByUser returns every apiary userID owns, unpaginated. Used
 	// only by Service.DeleteAllByUser, which must cascade-delete every
 	// apiary an account owns regardless of how many there are - unlike

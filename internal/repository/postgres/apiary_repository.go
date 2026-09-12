@@ -23,6 +23,23 @@ const minSearchLength = 3
 // violation.
 const uniqueViolationCode = "23505"
 
+// createdAtOrderClause returns the ORDER BY clause for a list query. When
+// sortOrder is nil, defaultClause (the query's normal, pre-existing order)
+// is used unchanged; otherwise the list is ordered by creation date in the
+// requested direction, with id tied to the same direction as a stable
+// tiebreaker (matching the convention every other ORDER BY in this
+// repository already follows).
+func createdAtOrderClause(sortOrder *string, defaultClause string) string {
+	if sortOrder == nil {
+		return defaultClause
+	}
+	dir := "ASC"
+	if *sortOrder == "desc" {
+		dir = "DESC"
+	}
+	return fmt.Sprintf("created_at %s, id %s", dir, dir)
+}
+
 // ApiaryRepository implements domain/apiary.Repository against
 // PostgreSQL. Every method scopes its query by user_id, so a user can
 // never read or write an apiary they don't own: there's no separate
@@ -153,7 +170,7 @@ func (r *ApiaryRepository) GetByID(ctx context.Context, userID, apiaryID uuid.UU
 	return &a, nil
 }
 
-func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params, search *string) ([]*apiary.Apiary, int, error) {
+func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params, search, sortOrder *string) ([]*apiary.Apiary, int, error) {
 	countQ := `
 		SELECT count(*)
 		FROM apiaries
@@ -168,19 +185,21 @@ func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID, p p
 	`
 	listArgs := []any{userID}
 
+	orderBy := createdAtOrderClause(sortOrder, "created_at ASC, id ASC")
+
 	if search != nil && len(*search) >= minSearchLength {
 		pattern := "%" + *search + "%"
 		countQ += ` AND (name ILIKE $2 OR location ILIKE $2)`
 		countArgs = append(countArgs, pattern)
 		q += fmt.Sprintf(` AND (name ILIKE $2 OR location ILIKE $2)`)
 		q += fmt.Sprintf(`
-		ORDER BY created_at ASC, id ASC
-		LIMIT $3 OFFSET $4`)
+		ORDER BY %s
+		LIMIT $3 OFFSET $4`, orderBy)
 		listArgs = append(listArgs, pattern, p.Limit, p.Offset())
 	} else {
-		q += `
-		ORDER BY created_at ASC, id ASC
-		LIMIT $2 OFFSET $3`
+		q += fmt.Sprintf(`
+		ORDER BY %s
+		LIMIT $2 OFFSET $3`, orderBy)
 		listArgs = append(listArgs, p.Limit, p.Offset())
 	}
 

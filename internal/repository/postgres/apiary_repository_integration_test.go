@@ -169,7 +169,7 @@ func TestApiaryRepository_ListByUser_OnlyOwnApiaries(t *testing.T) {
 		t.Fatalf("create B1: %v", err)
 	}
 
-	list, total, err := repo.ListByUser(ctx, userA, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil)
+	list, total, err := repo.ListByUser(ctx, userA, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil)
 	if err != nil {
 		t.Fatalf("ListByUser: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestApiaryRepository_ListByUser_Pagination(t *testing.T) {
 	}
 
 	// First page.
-	first, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 2}, nil)
+	first, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 2}, nil, nil)
 	if err != nil {
 		t.Fatalf("ListByUser page 1: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestApiaryRepository_ListByUser_Pagination(t *testing.T) {
 	}
 
 	// Middle page.
-	middle, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 2, Limit: 2}, nil)
+	middle, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 2, Limit: 2}, nil, nil)
 	if err != nil {
 		t.Fatalf("ListByUser page 2: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestApiaryRepository_ListByUser_Pagination(t *testing.T) {
 	}
 
 	// Last (partial) page.
-	last, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 3, Limit: 2}, nil)
+	last, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 3, Limit: 2}, nil, nil)
 	if err != nil {
 		t.Fatalf("ListByUser page 3: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestApiaryRepository_ListByUser_Pagination(t *testing.T) {
 	}
 
 	// Page beyond available data.
-	beyond, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 10, Limit: 2}, nil)
+	beyond, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 10, Limit: 2}, nil, nil)
 	if err != nil {
 		t.Fatalf("ListByUser page 10: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestApiaryRepository_ListByUser_Empty(t *testing.T) {
 
 	repo := repopostgres.NewApiaryRepository(tx)
 
-	list, total, err := repo.ListByUser(ctx, uuid.New(), pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil)
+	list, total, err := repo.ListByUser(ctx, uuid.New(), pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil)
 	if err != nil {
 		t.Fatalf("ListByUser: %v", err)
 	}
@@ -321,11 +321,11 @@ func TestApiaryRepository_ListByUser_StableOrdering(t *testing.T) {
 		ids[i] = a.ID
 	}
 
-	firstRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4}, nil)
+	firstRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4}, nil, nil)
 	if err != nil {
 		t.Fatalf("ListByUser run 1: %v", err)
 	}
-	secondRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4}, nil)
+	secondRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4}, nil, nil)
 	if err != nil {
 		t.Fatalf("ListByUser run 2: %v", err)
 	}
@@ -338,6 +338,69 @@ func TestApiaryRepository_ListByUser_StableOrdering(t *testing.T) {
 			t.Fatalf("ordering unstable at index %d: %s vs %s", i, firstRun[i].ID, secondRun[i].ID)
 		}
 	}
+}
+
+func TestApiaryRepository_ListByUser_SortOrder(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewApiaryRepository(tx)
+	userID := uuid.New()
+
+	base := time.Now().UTC()
+	names := []string{"Oldest", "Middle", "Newest"}
+	for i, name := range names {
+		a := apiary.New(userID, name, "", "")
+		a.CreatedAt = base.Add(time.Duration(i) * time.Minute)
+		a.UpdatedAt = a.CreatedAt
+		if err := repo.Create(ctx, a); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+
+	asc := "asc"
+	ascending, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, &asc)
+	if err != nil {
+		t.Fatalf("ListByUser asc: %v", err)
+	}
+	if got := namesOf(ascending); !equalStrings(got, []string{"Oldest", "Middle", "Newest"}) {
+		t.Fatalf("ascending order = %v, want [Oldest Middle Newest]", got)
+	}
+
+	desc := "desc"
+	descending, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, &desc)
+	if err != nil {
+		t.Fatalf("ListByUser desc: %v", err)
+	}
+	if got := namesOf(descending); !equalStrings(got, []string{"Newest", "Middle", "Oldest"}) {
+		t.Fatalf("descending order = %v, want [Newest Middle Oldest]", got)
+	}
+}
+
+func namesOf(apiaries []*apiary.Apiary) []string {
+	names := make([]string, len(apiaries))
+	for i, a := range apiaries {
+		names[i] = a.Name
+	}
+	return names
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestApiaryRepository_Update(t *testing.T) {
