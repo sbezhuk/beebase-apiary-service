@@ -27,7 +27,7 @@ issuing), `beebase-hive-service`, `beebase-inspection-service`,
 ```bash
 cp .env.example .env
 # point AUTH_JWKS_URL at a running auth-service, e.g.
-#   http://localhost:8081/.well-known/jwks.json
+#  http://localhost:8081/.well-known/jwks.json
 
 # Option A: run Postgres in Docker, app on the host
 docker compose up -d postgres
