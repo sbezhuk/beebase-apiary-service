@@ -169,7 +169,7 @@ func TestApiaryRepository_ListByUser_OnlyOwnApiaries(t *testing.T) {
 		t.Fatalf("create B1: %v", err)
 	}
 
-	list, total, err := repo.ListByUser(ctx, userA, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil)
+	list, total, err := repo.ListByUser(ctx, userA, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser: %v", err)
 	}
@@ -207,7 +207,7 @@ func TestApiaryRepository_ListByUser_Pagination(t *testing.T) {
 	}
 
 	// First page.
-	first, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 2}, nil, nil)
+	first, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 2}, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser page 1: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestApiaryRepository_ListByUser_Pagination(t *testing.T) {
 	}
 
 	// Middle page.
-	middle, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 2, Limit: 2}, nil, nil)
+	middle, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 2, Limit: 2}, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser page 2: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestApiaryRepository_ListByUser_Pagination(t *testing.T) {
 	}
 
 	// Last (partial) page.
-	last, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 3, Limit: 2}, nil, nil)
+	last, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 3, Limit: 2}, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser page 3: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestApiaryRepository_ListByUser_Pagination(t *testing.T) {
 	}
 
 	// Page beyond available data.
-	beyond, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 10, Limit: 2}, nil, nil)
+	beyond, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 10, Limit: 2}, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser page 10: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestApiaryRepository_ListByUser_Empty(t *testing.T) {
 
 	repo := repopostgres.NewApiaryRepository(tx)
 
-	list, total, err := repo.ListByUser(ctx, uuid.New(), pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil)
+	list, total, err := repo.ListByUser(ctx, uuid.New(), pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser: %v", err)
 	}
@@ -321,11 +321,11 @@ func TestApiaryRepository_ListByUser_StableOrdering(t *testing.T) {
 		ids[i] = a.ID
 	}
 
-	firstRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4}, nil, nil)
+	firstRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4}, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser run 1: %v", err)
 	}
-	secondRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4}, nil, nil)
+	secondRun, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: 4}, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser run 2: %v", err)
 	}
@@ -365,7 +365,7 @@ func TestApiaryRepository_ListByUser_SortOrder(t *testing.T) {
 	}
 
 	asc := "asc"
-	ascending, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, &asc)
+	ascending, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, &asc, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser asc: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestApiaryRepository_ListByUser_SortOrder(t *testing.T) {
 	}
 
 	desc := "desc"
-	descending, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, &desc)
+	descending, _, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, &desc, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser desc: %v", err)
 	}
@@ -599,5 +599,69 @@ func TestApiaryRepository_ListAllByUser_Empty(t *testing.T) {
 	}
 	if len(all) != 0 {
 		t.Fatalf("ListAllByUser for a user with none = %d, want 0", len(all))
+	}
+}
+
+func TestApiaryRepository_ListByUser_WithoutHivesOnly(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewApiaryRepository(tx)
+	userID := uuid.New()
+
+	withHives := apiary.New(userID, "Has hives", "", "")
+	empty := apiary.New(userID, "Empty", "", "")
+	for _, a := range []*apiary.Apiary{withHives, empty} {
+		if err := repo.Create(ctx, a); err != nil {
+			t.Fatalf("create %s: %v", a.Name, err)
+		}
+	}
+
+	// The "has hives" set is computed by the application layer (this
+	// repository has no notion of hives); here it's just withHives.ID.
+	list, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, true, []uuid.UUID{withHives.ID})
+	if err != nil {
+		t.Fatalf("ListByUser without_hives: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("total = %d, want 1", total)
+	}
+	if len(list) != 1 || list[0].ID != empty.ID {
+		t.Fatalf("list = %+v, want only %s", list, empty.ID)
+	}
+}
+
+func TestApiaryRepository_ListByUser_WithoutHivesOnly_EmptySetMatchesEverything(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback(ctx) })
+
+	repo := repopostgres.NewApiaryRepository(tx)
+	userID := uuid.New()
+
+	a := apiary.New(userID, "Solo", "", "")
+	if err := repo.Create(ctx, a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// No apiary has hives anywhere, so the "has hives" set is empty -
+	// every apiary must qualify as "without hives", not zero of them.
+	list, total, err := repo.ListByUser(ctx, userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, true, nil)
+	if err != nil {
+		t.Fatalf("ListByUser without_hives with empty set: %v", err)
+	}
+	if total != 1 || len(list) != 1 {
+		t.Fatalf("total = %d, len = %d, want 1/1", total, len(list))
 	}
 }

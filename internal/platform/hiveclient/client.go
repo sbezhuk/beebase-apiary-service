@@ -1,9 +1,10 @@
-// Package hiveclient implements application/apiary.HiveCascadeDeleter
-// against the real hive-service over HTTP.
+// Package hiveclient implements application/apiary.HiveClient against
+// the real hive-service over HTTP.
 package hiveclient
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -18,7 +19,9 @@ const requestTimeout = 5 * time.Second
 // hive-service's DELETE /api/v1/hives?apiary_id=..., forwarding the
 // caller's own access token so hive-service (and, transitively,
 // inspection-service and media-service) scope the delete to the same user
-// this service already verified owns the apiary.
+// this service already verified owns the apiary. It also implements
+// ApiaryIDsWithHives (GET /api/v1/hives/apiary-ids-with-hives), used to
+// filter apiary listings to "apiaries without hives".
 type Client struct {
 	baseURL string
 	http    *http.Client
@@ -55,4 +58,35 @@ func (c *Client) DeleteByApiary(ctx context.Context, accessToken string, apiaryI
 	default:
 		return fmt.Errorf("hiveclient: unexpected status %d from hive-service", resp.StatusCode)
 	}
+}
+
+// ApiaryIDsWithHives implements application/apiary.HiveClient by calling
+// GET /api/v1/hives/apiary-ids-with-hives.
+func (c *Client) ApiaryIDsWithHives(ctx context.Context, accessToken string) ([]uuid.UUID, error) {
+	u := fmt.Sprintf("%s/api/v1/hives/apiary-ids-with-hives", c.baseURL)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("hiveclient: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("hiveclient: call hive-service: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("hiveclient: unexpected status %d from hive-service", resp.StatusCode)
+	}
+
+	var body struct {
+		ApiaryIDs []uuid.UUID `json:"apiary_ids"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("hiveclient: decode response: %w", err)
+	}
+
+	return body.ApiaryIDs, nil
 }

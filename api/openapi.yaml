@@ -137,6 +137,18 @@ paths:
             direction as a stable secondary sort.
           required: false
           schema: { type: string, enum: [asc, desc] }
+        - name: without_hives
+          in: query
+          description: >
+            When exactly "true", restricts results to apiaries that
+            currently have zero hives - no grace period based on the
+            apiary's age, an apiary qualifies the instant its last hive
+            is gone. Any other value (including "false", or omitting
+            it) leaves results unfiltered. Computed live against
+            hive-service on every request - this service holds no hive
+            data of its own.
+          required: false
+          schema: { type: string, enum: [true, false] }
       responses:
         "200":
           description: A page of the caller's apiaries.
@@ -157,6 +169,11 @@ paths:
               schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
         "401":
           description: Missing, invalid, or expired access token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "500":
+          description: A required upstream service (hive-service) failed or was unreachable while computing without_hives.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }

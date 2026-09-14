@@ -86,7 +86,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 
 // List handles GET /apiaries.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	userID, ok := h.requireUserID(w, r)
+	userID, token, ok := h.requireAuth(w, r)
 	if !ok {
 		return
 	}
@@ -98,14 +98,23 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteValidationError(w, fields)
 		return
 	}
+	withoutHives := parseWithoutHives(r)
 
-	apiaries, total, err := h.service.List(r.Context(), userID, p, search, sortOrder)
+	apiaries, total, err := h.service.List(r.Context(), userID, token, p, search, sortOrder, withoutHives)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, pagination.NewResponse(newListResponse(apiaries, h.publicBaseURL), p, total))
+}
+
+// parseWithoutHives reads the optional "without_hives" query parameter:
+// only the exact value "true" filters; anything else (absent, "false",
+// or garbage) leaves results unfiltered - there's no invalid value to
+// reject here, unlike search/sortOrder.
+func parseWithoutHives(r *http.Request) bool {
+	return r.URL.Query().Get("without_hives") == "true"
 }
 
 func parseSearch(r *http.Request, fields map[string]string) (*string, map[string]string) {
