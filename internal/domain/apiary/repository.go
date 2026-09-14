@@ -29,8 +29,14 @@ type Repository interface {
 	// matched case-insensitively against name and location; a nil search
 	// means no filter. When sortOrder is non-nil ("asc" or "desc") the
 	// page is ordered by creation date in that direction instead of the
-	// default order; a nil sortOrder keeps the default order.
-	ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params, search, sortOrder *string) (apiaries []*Apiary, total int, err error)
+	// default order; a nil sortOrder keeps the default order. When
+	// withoutHivesOnly is true, results are additionally restricted to
+	// apiary ids not in apiaryIDsWithHives (computed by the application
+	// layer from hive-service's own data - this repository has no notion
+	// of hives of its own); an empty apiaryIDsWithHives then correctly
+	// means every apiary qualifies. When withoutHivesOnly is false,
+	// apiaryIDsWithHives is ignored.
+	ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params, search, sortOrder *string, withoutHivesOnly bool, apiaryIDsWithHives []uuid.UUID) (apiaries []*Apiary, total int, err error)
 	// ListAllByUser returns every apiary userID owns, unpaginated. Used
 	// only by Service.DeleteAllByUser, which must cascade-delete every
 	// apiary an account owns regardless of how many there are - unlike

@@ -170,38 +170,55 @@ func (r *ApiaryRepository) GetByID(ctx context.Context, userID, apiaryID uuid.UU
 	return &a, nil
 }
 
-func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params, search, sortOrder *string) ([]*apiary.Apiary, int, error) {
+func (r *ApiaryRepository) ListByUser(ctx context.Context, userID uuid.UUID, p pagination.Params, search, sortOrder *string, withoutHivesOnly bool, apiaryIDsWithHives []uuid.UUID) ([]*apiary.Apiary, int, error) {
 	countQ := `
 		SELECT count(*)
 		FROM apiaries
 		WHERE user_id = $1 AND deleted_at IS NULL
 	`
-	countArgs := []any{userID}
-
 	q := `
 		SELECT id, user_id, name, location, description, lat, lon, images, created_at, updated_at, deleted_at
 		FROM apiaries
 		WHERE user_id = $1 AND deleted_at IS NULL
 	`
-	listArgs := []any{userID}
+	countArgs := []any{userID}
+	argIdx := 2
 
-	orderBy := createdAtOrderClause(sortOrder, "created_at ASC, id ASC")
+	if withoutHivesOnly {
+		// apiaryIDsWithHives is the full set of the caller's apiaries
+		// that currently have hives, computed by the application layer -
+		// excluding it (rather than allow-listing "without hives")
+		// correctly matches every apiary when the set is empty (nobody
+		// has any hives yet), instead of "no filter" wrongly doing the
+		// same.
+		cond := fmt.Sprintf(" AND id != ALL($%d)", argIdx)
+		countQ += cond
+		q += cond
+		ids := apiaryIDsWithHives
+		if ids == nil {
+			ids = []uuid.UUID{}
+		}
+		countArgs = append(countArgs, ids)
+		argIdx++
+	}
+
+	listArgs := make([]any, len(countArgs))
+	copy(listArgs, countArgs)
 
 	if search != nil && len(*search) >= minSearchLength {
 		pattern := "%" + *search + "%"
-		countQ += ` AND (name ILIKE $2 OR location ILIKE $2)`
+		cond := fmt.Sprintf(" AND (name ILIKE $%d OR location ILIKE $%d)", argIdx, argIdx)
+		countQ += cond
+		q += cond
 		countArgs = append(countArgs, pattern)
-		q += fmt.Sprintf(` AND (name ILIKE $2 OR location ILIKE $2)`)
-		q += fmt.Sprintf(`
-		ORDER BY %s
-		LIMIT $3 OFFSET $4`, orderBy)
-		listArgs = append(listArgs, pattern, p.Limit, p.Offset())
-	} else {
-		q += fmt.Sprintf(`
-		ORDER BY %s
-		LIMIT $2 OFFSET $3`, orderBy)
-		listArgs = append(listArgs, p.Limit, p.Offset())
+		listArgs = append(listArgs, pattern)
+		argIdx++
 	}
+
+	q += fmt.Sprintf(`
+		ORDER BY %s
+		LIMIT $%d OFFSET $%d`, createdAtOrderClause(sortOrder, "created_at ASC, id ASC"), argIdx, argIdx+1)
+	listArgs = append(listArgs, p.Limit, p.Offset())
 
 	var total int
 	if err := r.db.QueryRow(ctx, countQ, countArgs...).Scan(&total); err != nil {

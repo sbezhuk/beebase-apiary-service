@@ -21,13 +21,13 @@ import (
 // which enforces ownership at the query level.
 type Service struct {
 	apiaries      apiary.Repository
-	hives         HiveCascadeDeleter
+	hives         HiveClient
 	media         MediaClient
 	subscriptions EntitlementResolver
 }
 
 // NewService constructs a Service.
-func NewService(apiaries apiary.Repository, hives HiveCascadeDeleter, media MediaClient, subscriptions EntitlementResolver) *Service {
+func NewService(apiaries apiary.Repository, hives HiveClient, media MediaClient, subscriptions EntitlementResolver) *Service {
 	return &Service{apiaries: apiaries, hives: hives, media: media, subscriptions: subscriptions}
 }
 
@@ -95,8 +95,20 @@ func (s *Service) Get(ctx context.Context, userID, apiaryID uuid.UUID) (*apiary.
 // case-insensitively against the apiary's name and location fields. When
 // sortOrder is non-nil ("asc" or "desc") the page is ordered by creation
 // date in that direction instead of the repository's default order.
-func (s *Service) List(ctx context.Context, userID uuid.UUID, p pagination.Params, search, sortOrder *string) ([]*apiary.Apiary, int, error) {
-	return s.apiaries.ListByUser(ctx, userID, p, search, sortOrder)
+// When withoutHives is true, results are additionally restricted to
+// apiaries that currently have zero hives - accessToken is only ever
+// used for that filter, forwarded to hive-service so it can answer
+// against its own data (this service has none of its own).
+func (s *Service) List(ctx context.Context, userID uuid.UUID, accessToken string, p pagination.Params, search, sortOrder *string, withoutHives bool) ([]*apiary.Apiary, int, error) {
+	var apiaryIDsWithHives []uuid.UUID
+	if withoutHives {
+		ids, err := s.hives.ApiaryIDsWithHives(ctx, accessToken)
+		if err != nil {
+			return nil, 0, fmt.Errorf("apiary: get apiary ids with hives: %w", err)
+		}
+		apiaryIDsWithHives = ids
+	}
+	return s.apiaries.ListByUser(ctx, userID, p, search, sortOrder, withoutHives, apiaryIDsWithHives)
 }
 
 // Update replaces the editable fields of the apiary identified by

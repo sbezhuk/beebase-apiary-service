@@ -61,10 +61,24 @@ type fakeCascadeTarget struct {
 	mu       sync.Mutex
 	received []*http.Request
 	ownedIDs map[uuid.UUID]bool // mediaID -> belongs to the caller
+
+	// apiaryIDsWithHives backs GET /api/v1/hives/apiary-ids-with-hives
+	// when this fake stands in for hive-service - irrelevant when it
+	// stands in for media-service instead.
+	apiaryIDsWithHives []uuid.UUID
 }
 
 func newFakeCascadeTarget() *fakeCascadeTarget {
 	return &fakeCascadeTarget{ownedIDs: map[uuid.UUID]bool{}}
+}
+
+// setApiaryIDsWithHives configures this fake's GET
+// /api/v1/hives/apiary-ids-with-hives response, when standing in for
+// hive-service.
+func (f *fakeCascadeTarget) setApiaryIDsWithHives(ids ...uuid.UUID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.apiaryIDsWithHives = ids
 }
 
 // own registers each of ids as belonging to the caller, so this fake's GET
@@ -87,9 +101,27 @@ func (f *fakeCascadeTarget) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/media":
 		f.serveList(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/hives/apiary-ids-with-hives":
+		f.serveApiaryIDsWithHives(w)
 	default:
 		w.WriteHeader(http.StatusNoContent)
 	}
+}
+
+// serveApiaryIDsWithHives answers GET
+// /api/v1/hives/apiary-ids-with-hives when this fake stands in for
+// hive-service.
+func (f *fakeCascadeTarget) serveApiaryIDsWithHives(w http.ResponseWriter) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	ids := f.apiaryIDsWithHives
+	if ids == nil {
+		ids = []uuid.UUID{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"apiary_ids": ids})
 }
 
 // serveList answers GET /api/v1/media?ids=&ids=...: returns every
@@ -962,3 +994,61 @@ func TestApiaryFlow_MediaLimit(t *testing.T) {
 	}
 }
 
+func TestApiaryFlow_WithoutHivesFilter(t *testing.T) {
+	stack := newTestStack(t)
+	userID := uuid.New()
+	token := stack.tokenFor(t, userID)
+
+	create := func(name string) apiaryhttp.Response {
+		resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{"name": name})
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create %s: status = %d, want %d", name, resp.StatusCode, http.StatusCreated)
+		}
+		var a apiaryhttp.Response
+		decodeJSON(t, resp, &a)
+		return a
+	}
+
+	withHives := create("Has hives")
+	empty := create("Empty")
+	stack.hives.setApiaryIDsWithHives(withHives.ID)
+
+	resp := stack.request(t, http.MethodGet, "/api/v1/apiaries?without_hives=true", token, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("list without_hives: status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	var page pagination.Response[apiaryhttp.Response]
+	decodeJSON(t, resp, &page)
+	if page.Pagination.Total != 1 {
+		t.Fatalf("total = %d, want 1", page.Pagination.Total)
+	}
+	if len(page.Items) != 1 || page.Items[0].ID != empty.ID {
+		t.Fatalf("items = %+v, want only %s", page.Items, empty.ID)
+	}
+}
+
+func TestApiaryFlow_WithoutHivesFilter_FalseOrAbsentReturnsEverything(t *testing.T) {
+	stack := newTestStack(t)
+	userID := uuid.New()
+	token := stack.tokenFor(t, userID)
+
+	resp := stack.request(t, http.MethodPost, "/api/v1/apiaries", token, map[string]string{"name": "A1"})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+	var created apiaryhttp.Response
+	decodeJSON(t, resp, &created)
+	stack.hives.setApiaryIDsWithHives(created.ID)
+
+	for _, path := range []string{"/api/v1/apiaries", "/api/v1/apiaries?without_hives=false", "/api/v1/apiaries?without_hives=garbage"} {
+		resp := stack.request(t, http.MethodGet, path, token, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, want %d", path, resp.StatusCode, http.StatusOK)
+		}
+		var page pagination.Response[apiaryhttp.Response]
+		decodeJSON(t, resp, &page)
+		if page.Pagination.Total != 1 {
+			t.Errorf("GET %s: total = %d, want 1 (unfiltered)", path, page.Pagination.Total)
+		}
+	}
+}

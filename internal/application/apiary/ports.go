@@ -6,12 +6,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// HiveCascadeDeleter deletes every hive belonging to an apiary - and,
-// transitively, their inspections and media - in hive-service, as part of
-// cascading an apiary delete. It's a port because hives live in a
-// different service with its own database.
-type HiveCascadeDeleter interface {
+// HiveClient is this service's dependency on hive-service.
+type HiveClient interface {
+	// DeleteByApiary deletes every hive belonging to an apiary - and,
+	// transitively, their inspections and media - as part of cascading
+	// an apiary delete.
 	DeleteByApiary(ctx context.Context, accessToken string, apiaryID uuid.UUID) error
+	// ApiaryIDsWithHives returns the id of every apiary belonging to
+	// whoever presented accessToken that currently has at least one
+	// hive. Used to filter apiary listings to "apiaries without hives" -
+	// this service has no notion of hives of its own, so it asks
+	// hive-service instead of duplicating that data.
+	ApiaryIDsWithHives(ctx context.Context, accessToken string) ([]uuid.UUID, error)
 }
 
 // MediaClient is apiary-service's dependency on media-service.

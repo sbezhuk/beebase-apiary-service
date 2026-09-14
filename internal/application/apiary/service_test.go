@@ -82,12 +82,19 @@ func (f *fakeRepo) GetByID(_ context.Context, userID, apiaryID uuid.UUID) (*apia
 	return &cp, nil
 }
 
-func (f *fakeRepo) ListByUser(_ context.Context, userID uuid.UUID, p pagination.Params, _, sortOrder *string) ([]*apiary.Apiary, int, error) {
+func (f *fakeRepo) ListByUser(_ context.Context, userID uuid.UUID, p pagination.Params, _, sortOrder *string, withoutHivesOnly bool, apiaryIDsWithHives []uuid.UUID) ([]*apiary.Apiary, int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	withHives := make(map[uuid.UUID]bool, len(apiaryIDsWithHives))
+	for _, id := range apiaryIDsWithHives {
+		withHives[id] = true
+	}
 	var all []*apiary.Apiary
 	for _, a := range f.byID {
 		if a.UserID == userID && a.DeletedAt == nil {
+			if withoutHivesOnly && withHives[a.ID] {
+				continue
+			}
 			cp := *a
 			all = append(all, &cp)
 		}
@@ -180,6 +187,11 @@ type fakeHiveDeleter struct {
 	mu      sync.Mutex
 	deleted []uuid.UUID
 	failFor map[uuid.UUID]error
+
+	// apiaryIDsWithHives/apiaryIDsWithHivesErr back ApiaryIDsWithHives -
+	// irrelevant to every test that doesn't exercise without_hives.
+	apiaryIDsWithHives    []uuid.UUID
+	apiaryIDsWithHivesErr error
 }
 
 func newFakeHiveDeleter() *fakeHiveDeleter {
@@ -198,6 +210,15 @@ func (f *fakeHiveDeleter) DeleteByApiary(_ context.Context, _ string, apiaryID u
 	}
 	f.deleted = append(f.deleted, apiaryID)
 	return nil
+}
+
+func (f *fakeHiveDeleter) ApiaryIDsWithHives(_ context.Context, _ string) ([]uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.apiaryIDsWithHivesErr != nil {
+		return nil, f.apiaryIDsWithHivesErr
+	}
+	return f.apiaryIDsWithHives, nil
 }
 
 func (f *fakeHiveDeleter) wasDeleted(apiaryID uuid.UUID) bool {
@@ -449,7 +470,7 @@ func TestCreate_WithImages_RejectsForeignMedia(t *testing.T) {
 		t.Fatalf("Create with foreign media: got %v, want ErrImageNotFound", err)
 	}
 
-	list, _, err := repo.ListByUser(context.Background(), userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil)
+	list, _, err := repo.ListByUser(context.Background(), userID, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, false, nil)
 	if err != nil {
 		t.Fatalf("ListByUser: %v", err)
 	}
@@ -523,7 +544,7 @@ func TestList_ReturnsOnlyOwnApiaries(t *testing.T) {
 		t.Fatalf("Create B1: %v", err)
 	}
 
-	list, total, err := svc.List(context.Background(), userA, pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil)
+	list, total, err := svc.List(context.Background(), userA, "token", pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -551,7 +572,7 @@ func TestList_Pagination(t *testing.T) {
 		}
 	}
 
-	firstPage, total, err := svc.List(context.Background(), userID, pagination.Params{Page: 1, Limit: 2}, nil, nil)
+	firstPage, total, err := svc.List(context.Background(), userID, "token", pagination.Params{Page: 1, Limit: 2}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("List page 1: %v", err)
 	}
@@ -562,7 +583,7 @@ func TestList_Pagination(t *testing.T) {
 		t.Fatalf("page 1 returned %d apiaries, want 2", len(firstPage))
 	}
 
-	lastPage, total, err := svc.List(context.Background(), userID, pagination.Params{Page: 3, Limit: 2}, nil, nil)
+	lastPage, total, err := svc.List(context.Background(), userID, "token", pagination.Params{Page: 3, Limit: 2}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("List page 3: %v", err)
 	}
@@ -573,7 +594,7 @@ func TestList_Pagination(t *testing.T) {
 		t.Fatalf("page 3 returned %d apiaries, want 1", len(lastPage))
 	}
 
-	beyond, total, err := svc.List(context.Background(), userID, pagination.Params{Page: 10, Limit: 2}, nil, nil)
+	beyond, total, err := svc.List(context.Background(), userID, "token", pagination.Params{Page: 10, Limit: 2}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("List page 10: %v", err)
 	}
@@ -588,7 +609,7 @@ func TestList_Pagination(t *testing.T) {
 func TestList_Empty(t *testing.T) {
 	svc := newService(newFakeRepo())
 
-	list, total, err := svc.List(context.Background(), uuid.New(), pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil)
+	list, total, err := svc.List(context.Background(), uuid.New(), "token", pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, false)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -1153,8 +1174,6 @@ func TestMediaLimit_IndependentPerApiary(t *testing.T) {
 	}
 }
 
-
-
 func TestDelete_Success(t *testing.T) {
 	repo := newFakeRepo()
 	svc := newService(repo)
@@ -1516,5 +1535,88 @@ func TestCreate_SubscriptionLookupFailure_FailsClosed(t *testing.T) {
 	count, _ := repo.CountByUser(context.Background(), userID)
 	if count != 0 {
 		t.Fatalf("no apiary should have been created on lookup failure, got count %d", count)
+	}
+}
+
+// --- without_hives filter ---
+
+func TestList_WithoutHivesFilter(t *testing.T) {
+	repo := newFakeRepo()
+	hives := newFakeHiveDeleter()
+	svc := appapiary.NewService(repo, hives, newFakeMediaClient(), newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	withHives, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Has hives"})
+	if err != nil {
+		t.Fatalf("create withHives: %v", err)
+	}
+	empty, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "Empty"})
+	if err != nil {
+		t.Fatalf("create empty: %v", err)
+	}
+	hives.apiaryIDsWithHives = []uuid.UUID{withHives.ID}
+
+	list, total, err := svc.List(context.Background(), userID, "token", pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, true)
+	if err != nil {
+		t.Fatalf("List with without_hives: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("total = %d, want 1", total)
+	}
+	if len(list) != 1 || list[0].ID != empty.ID {
+		t.Fatalf("list = %+v, want only %s", list, empty.ID)
+	}
+}
+
+func TestList_WithoutHivesFilter_NoHivesAtAllMatchesEverything(t *testing.T) {
+	repo := newFakeRepo()
+	hives := newFakeHiveDeleter() // apiaryIDsWithHives left empty
+	svc := appapiary.NewService(repo, hives, newFakeMediaClient(), newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	if _, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "A1"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "A2"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	_, total, err := svc.List(context.Background(), userID, "token", pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, true)
+	if err != nil {
+		t.Fatalf("List with without_hives: %v", err)
+	}
+	if total != 2 {
+		t.Fatalf("total = %d, want 2 (no hives anywhere, every apiary qualifies)", total)
+	}
+}
+
+func TestList_WithoutFilterDoesNotCallHiveService(t *testing.T) {
+	repo := newFakeRepo()
+	// If List ever calls ApiaryIDsWithHives when withoutHives is false,
+	// this makes the test fail loudly instead of silently.
+	hives := &fakeHiveDeleter{apiaryIDsWithHivesErr: errors.New("must not be called when without_hives is false")}
+	svc := appapiary.NewService(repo, hives, newFakeMediaClient(), newFakeSubscriptionClient())
+	userID := uuid.New()
+
+	if _, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "A1"}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	_, total, err := svc.List(context.Background(), userID, "token", pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, false)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 1 {
+		t.Fatalf("total = %d, want 1", total)
+	}
+}
+
+func TestList_WithoutHives_UpstreamErrorPropagates(t *testing.T) {
+	repo := newFakeRepo()
+	hives := &fakeHiveDeleter{apiaryIDsWithHivesErr: errors.New("hive-service unreachable")}
+	svc := appapiary.NewService(repo, hives, newFakeMediaClient(), newFakeSubscriptionClient())
+
+	if _, _, err := svc.List(context.Background(), uuid.New(), "token", pagination.Params{Page: 1, Limit: pagination.DefaultLimit}, nil, nil, true); err == nil {
+		t.Fatal("List with without_hives: got nil error, want upstream failure to propagate")
 	}
 }
