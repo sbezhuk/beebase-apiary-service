@@ -359,16 +359,23 @@ func TestWritability_MultipleSubscriptionCycles(t *testing.T) {
 		t.Fatalf("Create a1: %v", err)
 	}
 
-	// Upgrade to Pro: create two more.
+	// Upgrade to Pro: create two more. CreatedAt is forced strictly after
+	// a1 (and after each other) since time.Now() alone doesn't guarantee
+	// distinct timestamps for calls this close together, and the
+	// (created_at, id) ordering this test exercises must be deterministic
+	// - see TestWritability_OverFreeLimit_OldestWritable for the same
+	// pattern.
 	subs.entitlement = appapiary.EntitlementPro
 	a2, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "A2"})
 	if err != nil {
 		t.Fatalf("Create a2: %v", err)
 	}
+	repo.byID[a2.ID].CreatedAt = a1.CreatedAt.Add(time.Hour)
 	a3, err := svc.Create(context.Background(), userID, "token", appapiary.CreateInput{Name: "A3"})
 	if err != nil {
 		t.Fatalf("Create a3: %v", err)
 	}
+	repo.byID[a3.ID].CreatedAt = a1.CreatedAt.Add(2 * time.Hour)
 
 	// Downgrade: only the oldest (a1) should remain writable.
 	subs.entitlement = appapiary.EntitlementFree
