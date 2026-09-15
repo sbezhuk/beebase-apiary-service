@@ -628,8 +628,8 @@ func TestApiaryFlow_DeleteCascadesHivesAndMedia(t *testing.T) {
 		t.Fatalf("delete: status = %d, want %d", resp.StatusCode, http.StatusNoContent)
 	}
 
-	if !stack.hives.calledWithQuery("apiary_id", created.ID.String()) {
-		t.Errorf("delete did not cascade to hive-service for apiary_id=%s", created.ID)
+	if !stack.hives.calledWithQuery("apiaryId", created.ID.String()) {
+		t.Errorf("delete did not cascade to hive-service for apiaryId=%s", created.ID)
 	}
 	if !stack.media.calledWithQueryValue("ids", photo.String()) {
 		t.Errorf("delete did not cascade to media-service for the apiary's own image %s", photo)
@@ -713,11 +713,11 @@ func TestApiaryFlow_DeleteAllMineCascadesEveryApiary(t *testing.T) {
 		t.Fatalf("delete all mine: status = %d, want %d", resp.StatusCode, http.StatusNoContent)
 	}
 
-	if !stack.hives.calledWithQuery("apiary_id", first.ID.String()) {
-		t.Errorf("delete all mine did not cascade to hive-service for apiary_id=%s", first.ID)
+	if !stack.hives.calledWithQuery("apiaryId", first.ID.String()) {
+		t.Errorf("delete all mine did not cascade to hive-service for apiaryId=%s", first.ID)
 	}
-	if !stack.hives.calledWithQuery("apiary_id", second.ID.String()) {
-		t.Errorf("delete all mine did not cascade to hive-service for apiary_id=%s", second.ID)
+	if !stack.hives.calledWithQuery("apiaryId", second.ID.String()) {
+		t.Errorf("delete all mine did not cascade to hive-service for apiaryId=%s", second.ID)
 	}
 	if !stack.media.calledWithQueryValue("ids", photo.String()) {
 		t.Errorf("delete all mine did not cascade to media-service for the first apiary's own image %s", photo)
@@ -1013,7 +1013,7 @@ func TestApiaryFlow_WithoutHivesFilter(t *testing.T) {
 	empty := create("Empty")
 	stack.hives.setApiaryIDsWithHives(withHives.ID)
 
-	resp := stack.request(t, http.MethodGet, "/api/v1/apiaries?without_hives=true", token, nil)
+	resp := stack.request(t, http.MethodGet, "/api/v1/apiaries?withoutHives=true", token, nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("list without_hives: status = %d, want %d", resp.StatusCode, http.StatusOK)
 	}
@@ -1040,7 +1040,7 @@ func TestApiaryFlow_WithoutHivesFilter_FalseOrAbsentReturnsEverything(t *testing
 	decodeJSON(t, resp, &created)
 	stack.hives.setApiaryIDsWithHives(created.ID)
 
-	for _, path := range []string{"/api/v1/apiaries", "/api/v1/apiaries?without_hives=false", "/api/v1/apiaries?without_hives=garbage"} {
+	for _, path := range []string{"/api/v1/apiaries", "/api/v1/apiaries?withoutHives=false", "/api/v1/apiaries?withoutHives=garbage"} {
 		resp := stack.request(t, http.MethodGet, path, token, nil)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("GET %s: status = %d, want %d", path, resp.StatusCode, http.StatusOK)

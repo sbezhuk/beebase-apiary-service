@@ -15,7 +15,7 @@ import (
 // download route, built fresh on every response.
 type ImageResponse struct {
 	ID       uuid.UUID `json:"id"`
-	ImageURL string    `json:"image_url"`
+	ImageURL string    `json:"imageUrl"`
 }
 
 // Response is the public representation of an apiary.
@@ -34,8 +34,8 @@ type Response struct {
 	// Service.isWritable). Lets Flutter render locked-resource UI without
 	// reimplementing this selection itself.
 	Writable  bool      `json:"writable"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // newResponse builds a Response for a. Images is read straight from a -
@@ -80,5 +80,5 @@ type WritableApiaryResponse struct {
 	// ApiaryID is the id of the one apiary within the caller's Free
 	// entitlement, or null if they own none. Only meaningful when
 	// Unrestricted is false.
-	ApiaryID *uuid.UUID `json:"apiary_id"`
+	ApiaryID *uuid.UUID `json:"apiaryId"`
 }

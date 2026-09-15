@@ -25,7 +25,7 @@ func TestClient_DeleteByApiary_Success(t *testing.T) {
 		if r.URL.Path != "/api/v1/hives" {
 			t.Errorf("path = %q, want /api/v1/hives", r.URL.Path)
 		}
-		if got := r.URL.Query().Get("apiary_id"); got != apiaryID.String() {
+		if got := r.URL.Query().Get("apiaryId"); got != apiaryID.String() {
 			t.Errorf("apiary_id = %q, want %s", got, apiaryID)
 		}
 		w.WriteHeader(http.StatusNoContent)
@@ -72,7 +72,7 @@ func TestClient_ApiaryIDsWithHives_Success(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"apiary_ids": []string{apiaryID.String()}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"apiaryIds": []string{apiaryID.String()}})
 	}))
 	defer srv.Close()
 
@@ -89,7 +89,7 @@ func TestClient_ApiaryIDsWithHives_Success(t *testing.T) {
 func TestClient_ApiaryIDsWithHives_EmptyYieldsEmptySlice(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"apiary_ids": []string{}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"apiaryIds": []string{}})
 	}))
 	defer srv.Close()
 
