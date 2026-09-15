@@ -129,7 +129,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 // or garbage) leaves results unfiltered - there's no invalid value to
 // reject here, unlike search/sortOrder.
 func parseWithoutHives(r *http.Request) bool {
-	return r.URL.Query().Get("without_hives") == "true"
+	return r.URL.Query().Get("withoutHives") == "true"
 }
 
 func parseSearch(r *http.Request, fields map[string]string) (*string, map[string]string) {

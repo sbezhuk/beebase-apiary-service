@@ -16,7 +16,7 @@ import (
 const requestTimeout = 5 * time.Second
 
 // Client cascades a hive delete for every hive under an apiary by calling
-// hive-service's DELETE /api/v1/hives?apiary_id=..., forwarding the
+	// hive-service's DELETE /api/v1/hives?apiaryId=..., forwarding the
 // caller's own access token so hive-service (and, transitively,
 // inspection-service and media-service) scope the delete to the same user
 // this service already verified owns the apiary. It also implements
@@ -38,7 +38,7 @@ func New(baseURL string) *Client {
 
 // DeleteByApiary implements application/apiary.HiveCascadeDeleter.
 func (c *Client) DeleteByApiary(ctx context.Context, accessToken string, apiaryID uuid.UUID) error {
-	u := fmt.Sprintf("%s/api/v1/hives?apiary_id=%s", c.baseURL, url.QueryEscape(apiaryID.String()))
+	u := fmt.Sprintf("%s/api/v1/hives?apiaryId=%s", c.baseURL, url.QueryEscape(apiaryID.String()))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u, nil)
 	if err != nil {
@@ -82,7 +82,7 @@ func (c *Client) ApiaryIDsWithHives(ctx context.Context, accessToken string) ([]
 	}
 
 	var body struct {
-		ApiaryIDs []uuid.UUID `json:"apiary_ids"`
+		ApiaryIDs []uuid.UUID `json:"apiaryIds"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		return nil, fmt.Errorf("hiveclient: decode response: %w", err)

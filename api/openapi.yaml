@@ -148,7 +148,7 @@ paths:
             direction as a stable secondary sort.
           required: false
           schema: { type: string, enum: [asc, desc] }
-        - name: without_hives
+        - name: withoutHives
           in: query
           description: >
             When exactly "true", restricts results to apiaries that
@@ -406,7 +406,7 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
-        image_url:
+        imageUrl:
           type: string
           format: uri
           description: >
@@ -448,19 +448,19 @@ components:
             it becomes the selected apiary again (e.g. the currently
             selected one is deleted) or the caller upgrades to Pro.
             Deleting an apiary is never affected by this flag.
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
 
     WritableApiaryResponse:
       type: object
-      required: [unrestricted, apiary_id]
+      required: [unrestricted, apiaryId]
       properties:
         unrestricted:
           type: boolean
           description: >
             True when the caller currently has Pro: every apiary they own
             is writable, and apiary_id is always null.
-        apiary_id:
+        apiaryId:
           type: string
           format: uuid
           nullable: true
@@ -472,14 +472,14 @@ components:
     Pagination:
       type: object
       description: Metadata describing the requested page relative to the full result set.
-      required: [page, limit, total, total_pages, has_next, has_previous]
+      required: [page, limit, total, totalPages, hasNext, hasPrevious]
       properties:
         page: { type: integer, example: 1 }
         limit: { type: integer, example: 20 }
         total: { type: integer, description: Total matching rows across all pages., example: 125 }
-        total_pages: { type: integer, example: 7 }
-        has_next: { type: boolean }
-        has_previous: { type: boolean }
+        totalPages: { type: integer, example: 7 }
+        hasNext: { type: boolean }
+        hasPrevious: { type: boolean }
 
     ErrorResponse:
       type: object
