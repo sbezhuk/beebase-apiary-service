@@ -14,6 +14,7 @@ import (
 
 	apiaryhttp "github.com/sbezhuk/beebase-apiary-service/internal/transport/http/apiary"
 	httpmw "github.com/sbezhuk/beebase-common/authmw"
+	"github.com/sbezhuk/beebase-common/internalauth"
 )
 
 // NewRouter builds the root HTTP handler for the service.
@@ -22,7 +23,12 @@ func NewRouter(
 	db *pgxpool.Pool,
 	apiaryHandler *apiaryhttp.Handler,
 	tokenParser httpmw.AccessTokenParser,
+	internalTokens ...string,
 ) http.Handler {
+	internalToken := ""
+	if len(internalTokens) > 0 {
+		internalToken = internalTokens[0]
+	}
 	r := chi.NewRouter()
 
 	r.Use(middleware.RequestID)
@@ -32,7 +38,7 @@ func NewRouter(
 
 	r.Get("/health", HealthHandler)
 	r.Get("/ready", ReadyHandler(db))
-	r.Get("/internal/api/v1/apiaries/{id}/exists", existsHandler(db, "apiaries", true))
+	r.With(internalauth.RequireAuth(internalToken)).Get("/internal/api/v1/apiaries/{id}/exists", existsHandler(db, "apiaries", true))
 
 	r.Route("/api/v1/apiaries", func(r chi.Router) {
 		r.Use(httpmw.RequireAuth(tokenParser))

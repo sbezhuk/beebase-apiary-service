@@ -33,7 +33,8 @@ type Config struct {
 	// AuthJWKSURL points at auth-service's public key endpoint
 	// (GET /.well-known/jwks.json), used to verify access tokens without
 	// ever holding a key that could mint one.
-	AuthJWKSURL string
+	AuthJWKSURL          string
+	InternalServiceToken string
 
 	// PublicBaseURL is the gateway's externally reachable base URL, used
 	// to build the image_url for each entry in a response's `images`.
@@ -74,7 +75,7 @@ func Load() (*Config, error) {
 
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
-		AuthJWKSURL:   getEnv("AUTH_JWKS_URL", ""),
+		AuthJWKSURL: getEnv("AUTH_JWKS_URL", ""), InternalServiceToken: getEnv("INTERNAL_SERVICE_TOKEN", ""),
 		PublicBaseURL: getEnv("PUBLIC_BASE_URL", ""),
 
 		HiveServiceURL:         getEnv("HIVE_SERVICE_URL", ""),
@@ -91,6 +92,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.AuthJWKSURL == "" {
 		return nil, fmt.Errorf("config: AUTH_JWKS_URL is required")
+	}
+	if cfg.InternalServiceToken == "" {
+		return nil, fmt.Errorf("config: INTERNAL_SERVICE_TOKEN is required")
 	}
 	if cfg.PublicBaseURL == "" {
 		return nil, fmt.Errorf("config: PUBLIC_BASE_URL is required")
