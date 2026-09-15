@@ -33,6 +33,11 @@ const (
 	CodeApiaryLimitReached = "apiary_limit_reached"
 	CodeApiaryNameExists   = "apiary_name_exists"
 	CodeMediaLimitReached  = "media_limit_reached"
+	// CodeResourceProLocked identifies a write attempted against a
+	// resource that itself currently requires Pro (outside the caller's
+	// Free entitlement) - as opposed to CodeApiaryLimitReached, which
+	// identifies a creation blocked by the plan's resource-count quota.
+	CodeResourceProLocked = "resource_pro_locked"
 )
 
 const minSearchLength = 3
@@ -164,7 +169,7 @@ func parseSortOrder(r *http.Request, fields map[string]string) (*string, map[str
 
 // Get handles GET /apiaries/{apiaryID}.
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
-	userID, ok := h.requireUserID(w, r)
+	userID, token, ok := h.requireAuth(w, r)
 	if !ok {
 		return
 	}
@@ -174,13 +179,33 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a, err := h.service.Get(r.Context(), userID, apiaryID)
+	a, err := h.service.Get(r.Context(), userID, token, apiaryID)
 	if err != nil {
 		h.writeServiceError(w, err)
 		return
 	}
 
 	httpx.WriteJSON(w, http.StatusOK, newResponse(a, h.publicBaseURL))
+}
+
+// WritableApiaryID handles GET /apiaries/writable. It's called by
+// hive-service (forwarding the caller's own access token, exactly like
+// every other cross-service call in this codebase) to resolve parent-
+// apiary writability without duplicating apiary-service's Free-apiary
+// selection algorithm.
+func (h *Handler) WritableApiaryID(w http.ResponseWriter, r *http.Request) {
+	userID, token, ok := h.requireAuth(w, r)
+	if !ok {
+		return
+	}
+
+	id, unrestricted, err := h.service.WritableApiaryID(r.Context(), userID, token)
+	if err != nil {
+		h.writeServiceError(w, err)
+		return
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, WritableApiaryResponse{Unrestricted: unrestricted, ApiaryID: id})
 }
 
 // Update handles PUT /apiaries/{apiaryID}.
@@ -314,6 +339,8 @@ func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {
 		httpx.WriteValidationError(w, map[string]string{"images": CodeImageNotFound})
 	case errors.Is(err, appapiary.ErrApiaryLimitReached):
 		httpx.WriteError(w, http.StatusForbidden, CodeApiaryLimitReached, "free tier allows a maximum of 1 apiary")
+	case errors.Is(err, appapiary.ErrReadOnly):
+		httpx.WriteError(w, http.StatusForbidden, CodeResourceProLocked, "this apiary requires Pro to edit")
 	case errors.Is(err, appapiary.ErrMediaLimitReached):
 		httpx.WriteError(w, http.StatusBadRequest, CodeMediaLimitReached, "maximum 5 photos allowed")
 	case errors.Is(err, apiary.ErrNameTaken):

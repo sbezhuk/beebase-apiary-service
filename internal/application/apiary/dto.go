@@ -1,6 +1,20 @@
 package apiary
 
-import "github.com/google/uuid"
+import (
+	"github.com/google/uuid"
+
+	"github.com/sbezhuk/beebase-apiary-service/internal/domain/apiary"
+)
+
+// WithAccess wraps an apiary with whether it's currently writable for the
+// caller who asked: always true on Pro; on Free, true only for the one
+// apiary within FreeMaxApiaries (see Service.isWritable). Embedding
+// *apiary.Apiary lets callers keep using its fields directly (a.Name,
+// a.ID, ...) without unwrapping.
+type WithAccess struct {
+	*apiary.Apiary
+	Writable bool
+}
 
 // CreateInput is the input to Service.Create.
 type CreateInput struct {

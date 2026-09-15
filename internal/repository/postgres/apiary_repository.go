@@ -315,6 +315,42 @@ func images(ids []uuid.UUID) []uuid.UUID {
 	return ids
 }
 
+// WritableIDs returns the ids of the oldest up to limit non-deleted
+// apiaries owned by userID, ordered created_at ASC, id ASC. A limit <= 0
+// returns every apiary id userID owns (no restriction).
+func (r *ApiaryRepository) WritableIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error) {
+	q := `
+		SELECT id FROM apiaries
+		WHERE user_id = $1 AND deleted_at IS NULL
+		ORDER BY created_at ASC, id ASC
+	`
+	args := []any{userID}
+	if limit > 0 {
+		q += " LIMIT $2"
+		args = append(args, limit)
+	}
+
+	rows, err := r.db.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: writable apiary ids: %w", err)
+	}
+	defer rows.Close()
+
+	ids := []uuid.UUID{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("postgres: scan writable apiary id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: writable apiary ids: %w", err)
+	}
+
+	return ids, nil
+}
+
 func (r *ApiaryRepository) HardDelete(ctx context.Context, userID, apiaryID uuid.UUID) error {
 	const q = `DELETE FROM apiaries WHERE id = $1 AND user_id = $2`
 

@@ -166,6 +166,34 @@ func (f *fakeRepo) hasActiveNameLocked(userID uuid.UUID, name string, excludeID 
 	return false
 }
 
+// WritableIDs returns the ids of the oldest up to limit non-deleted
+// apiaries owned by userID, ordered created_at ASC, id ASC - mirroring the
+// real repository's deterministic Free-entitlement selection.
+func (f *fakeRepo) WritableIDs(_ context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var all []*apiary.Apiary
+	for _, a := range f.byID {
+		if a.UserID == userID && a.DeletedAt == nil {
+			all = append(all, a)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].CreatedAt.Equal(all[j].CreatedAt) {
+			return all[i].CreatedAt.Before(all[j].CreatedAt)
+		}
+		return all[i].ID.String() < all[j].ID.String()
+	})
+	if limit > 0 && limit < len(all) {
+		all = all[:limit]
+	}
+	ids := make([]uuid.UUID, len(all))
+	for i, a := range all {
+		ids[i] = a.ID
+	}
+	return ids, nil
+}
+
 func (f *fakeRepo) HardDelete(_ context.Context, userID, apiaryID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -489,7 +517,7 @@ func TestGet_Success(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	got, err := svc.Get(context.Background(), userID, created.ID)
+	got, err := svc.Get(context.Background(), userID, "token", created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -501,7 +529,7 @@ func TestGet_Success(t *testing.T) {
 func TestGet_NotFound(t *testing.T) {
 	svc := newService(newFakeRepo())
 
-	_, err := svc.Get(context.Background(), uuid.New(), uuid.New())
+	_, err := svc.Get(context.Background(), uuid.New(), "token", uuid.New())
 	if !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Get with unknown id: got %v, want ErrNotFound", err)
 	}
@@ -522,7 +550,7 @@ func TestGet_WrongOwner_ReturnsNotFound(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	_, err = svc.Get(context.Background(), other, created.ID)
+	_, err = svc.Get(context.Background(), other, "token", created.ID)
 	if !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Get by non-owner: got %v, want ErrNotFound", err)
 	}
@@ -698,7 +726,7 @@ func TestUpdate_WrongOwner_ReturnsNotFound(t *testing.T) {
 	}
 
 	// and the original must be untouched
-	got, err := svc.Get(context.Background(), owner, created.ID)
+	got, err := svc.Get(context.Background(), owner, "token", created.ID)
 	if err != nil {
 		t.Fatalf("Get after failed hijack attempt: %v", err)
 	}
@@ -1040,7 +1068,7 @@ func TestUpdate_WithExistingImages_ExceedsLimit_PreservesExistingImages(t *testi
 		t.Fatalf("expected ErrMediaLimitReached, got %v", err)
 	}
 
-	persisted, err := svc.Get(context.Background(), userID, created.ID)
+	persisted, err := svc.Get(context.Background(), userID, "token", created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -1085,7 +1113,7 @@ func TestUpdate_WithExistingImages_NilImages_PreservesExistingImages(t *testing.
 		t.Fatalf("expected 5 photos preserved, got %d", len(updated.Images))
 	}
 
-	persisted, err := svc.Get(context.Background(), userID, created.ID)
+	persisted, err := svc.Get(context.Background(), userID, "token", created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -1188,7 +1216,7 @@ func TestDelete_Success(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	if _, err := svc.Get(context.Background(), userID, created.ID); !errors.Is(err, apiary.ErrNotFound) {
+	if _, err := svc.Get(context.Background(), userID, "token", created.ID); !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Get after Delete: got %v, want ErrNotFound", err)
 	}
 }
@@ -1208,7 +1236,7 @@ func TestDelete_WrongOwner_ReturnsNotFoundAndDoesNotDelete(t *testing.T) {
 		t.Fatalf("Delete by non-owner: got %v, want ErrNotFound", err)
 	}
 
-	if _, err := svc.Get(context.Background(), owner, created.ID); err != nil {
+	if _, err := svc.Get(context.Background(), owner, "token", created.ID); err != nil {
 		t.Fatalf("owner's apiary should survive a failed delete attempt by another user: %v", err)
 	}
 }
@@ -1244,7 +1272,7 @@ func TestDelete_CascadesHivesAndImagesBeforeApiary(t *testing.T) {
 	if !media.wasDeleted(photo) {
 		t.Error("Delete did not cascade to media-service for the apiary's own image")
 	}
-	if _, err := svc.Get(context.Background(), userID, created.ID); !errors.Is(err, apiary.ErrNotFound) {
+	if _, err := svc.Get(context.Background(), userID, "token", created.ID); !errors.Is(err, apiary.ErrNotFound) {
 		t.Fatalf("Get after Delete: got %v, want ErrNotFound", err)
 	}
 }
@@ -1305,7 +1333,7 @@ func TestDelete_AbortsOnHiveCascadeFailure_ApiarySurvives(t *testing.T) {
 	if media.deleteCallCount() != 0 {
 		t.Error("media-service was called even though hive-service failed first")
 	}
-	if _, err := svc.Get(context.Background(), userID, created.ID); err != nil {
+	if _, err := svc.Get(context.Background(), userID, "token", created.ID); err != nil {
 		t.Fatalf("apiary should survive when hive-service fails: %v", err)
 	}
 }
@@ -1340,7 +1368,7 @@ func TestDelete_AbortsOnMediaDeleteFailure_ApiarySurvives(t *testing.T) {
 	if !hives.wasDeleted(created.ID) {
 		t.Error("hive-service should have already been called before media-service failed")
 	}
-	if _, err := svc.Get(context.Background(), userID, created.ID); err != nil {
+	if _, err := svc.Get(context.Background(), userID, "token", created.ID); err != nil {
 		t.Fatalf("apiary should survive when media-service fails: %v", err)
 	}
 }
@@ -1378,10 +1406,10 @@ func TestDeleteAllByUser_CascadesEveryApiary(t *testing.T) {
 		t.Fatalf("DeleteAllByUser: %v", err)
 	}
 
-	if _, err := svc.Get(context.Background(), userID, a1.ID); !errors.Is(err, apiary.ErrNotFound) {
+	if _, err := svc.Get(context.Background(), userID, "token", a1.ID); !errors.Is(err, apiary.ErrNotFound) {
 		t.Errorf("a1 after DeleteAllByUser: got %v, want ErrNotFound", err)
 	}
-	if _, err := svc.Get(context.Background(), userID, a2.ID); !errors.Is(err, apiary.ErrNotFound) {
+	if _, err := svc.Get(context.Background(), userID, "token", a2.ID); !errors.Is(err, apiary.ErrNotFound) {
 		t.Errorf("a2 after DeleteAllByUser: got %v, want ErrNotFound", err)
 	}
 	if !hives.wasDeleted(a1.ID) || !hives.wasDeleted(a2.ID) {
@@ -1391,7 +1419,7 @@ func TestDeleteAllByUser_CascadesEveryApiary(t *testing.T) {
 		t.Error("DeleteAllByUser did not cascade to media-service for a2's own image")
 	}
 
-	if _, err := svc.Get(context.Background(), other, theirs.ID); err != nil {
+	if _, err := svc.Get(context.Background(), other, "token", theirs.ID); err != nil {
 		t.Fatalf("another user's apiary should survive: %v", err)
 	}
 }
@@ -1446,10 +1474,10 @@ func TestDeleteAllByUser_AbortsOnFirstFailure_RemainingApiariesSurvive(t *testin
 		t.Fatalf("DeleteAllByUser: got %v, want %v", err, boom)
 	}
 
-	if _, err := svc.Get(context.Background(), userID, firstVisited); err != nil {
+	if _, err := svc.Get(context.Background(), userID, "token", firstVisited); err != nil {
 		t.Fatalf("firstVisited should survive its own failed cascade: %v", err)
 	}
-	if _, err := svc.Get(context.Background(), userID, secondVisited); err != nil {
+	if _, err := svc.Get(context.Background(), userID, "token", secondVisited); err != nil {
 		t.Fatalf("secondVisited, not yet reached, should survive: %v", err)
 	}
 }

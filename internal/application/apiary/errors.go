@@ -17,3 +17,9 @@ var ErrApiaryLimitReached = errors.New("apiary limit reached")
 // ErrMediaLimitReached is returned when an attempt is made to attach more
 // photos than permitted by the media attachment limit.
 var ErrMediaLimitReached = errors.New("media limit reached")
+
+// ErrReadOnly is returned when a free-tier user attempts to modify an
+// apiary that currently falls outside their Free entitlement (see
+// FreeMaxApiaries and Service.isWritable) - i.e. a write attempted against
+// a Pro-locked apiary.
+var ErrReadOnly = errors.New("apiary is read-only under the free plan")
