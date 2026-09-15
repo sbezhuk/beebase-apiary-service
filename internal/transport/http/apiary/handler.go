@@ -6,6 +6,7 @@
 package apiary
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -42,13 +43,22 @@ type Handler struct {
 	service       *appapiary.Service
 	log           *slog.Logger
 	publicBaseURL string
+	reminders     interface {
+		Cleanup(context.Context, string, uuid.UUID) error
+	}
 }
 
 // NewHandler returns a Handler backed by service. publicBaseURL is the
 // gateway's externally reachable base URL, used to build each image's
 // image_url.
-func NewHandler(service *appapiary.Service, log *slog.Logger, publicBaseURL string) *Handler {
-	return &Handler{service: service, log: log, publicBaseURL: publicBaseURL}
+func NewHandler(service *appapiary.Service, log *slog.Logger, publicBaseURL string, reminders ...interface {
+	Cleanup(context.Context, string, uuid.UUID) error
+}) *Handler {
+	h := &Handler{service: service, log: log, publicBaseURL: publicBaseURL}
+	if len(reminders) > 0 {
+		h.reminders = reminders[0]
+	}
+	return h
 }
 
 // Create handles POST /apiaries.
@@ -236,6 +246,11 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+	if h.reminders != nil {
+		if err := h.reminders.Cleanup(r.Context(), "apiary", apiaryID); err != nil {
+			h.log.Warn("reminder cleanup failed", "entity_type", "apiary", "entity_id", apiaryID, "error", err)
+		}
+	}
 }
 
 // DeleteAllMine handles DELETE /apiaries. It cascades every apiary the
