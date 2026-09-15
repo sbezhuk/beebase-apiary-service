@@ -17,4 +17,3 @@ var ErrApiaryLimitReached = errors.New("apiary limit reached")
 // ErrMediaLimitReached is returned when an attempt is made to attach more
 // photos than permitted by the media attachment limit.
 var ErrMediaLimitReached = errors.New("media limit reached")
-
