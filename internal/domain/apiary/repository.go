@@ -51,4 +51,14 @@ type Repository interface {
 	// after hive-service and media-service have already deleted
 	// everything that belonged to this apiary.
 	HardDelete(ctx context.Context, userID, apiaryID uuid.UUID) error
+	// WritableIDs returns the ids of the oldest up to limit non-deleted
+	// apiaries owned by userID, ordered created_at ASC, id ASC - the
+	// deterministic selection of which apiaries fall within a Free user's
+	// writable-apiary entitlement (see application/apiary.FreeMaxApiaries).
+	// This is computed fresh from current live rows on every call rather
+	// than derived from any stored "locked" flag or from when Pro was
+	// purchased, so it stays correct across deletes, replacements, and
+	// repeated upgrade/downgrade cycles without needing to remember any of
+	// that history. If limit <= 0, returns every apiary id userID owns.
+	WritableIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error)
 }

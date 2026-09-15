@@ -45,6 +45,11 @@ func NewRouter(
 
 		r.Post("/", apiaryHandler.Create)
 		r.Get("/", apiaryHandler.List)
+		// Static sibling of "/{apiaryID}", never confusable with an apiary
+		// id. Called by hive-service (forwarding the caller's own access
+		// token) to resolve parent-apiary writability in bulk, without a
+		// per-hive or per-apiary-id round trip.
+		r.Get("/writable", apiaryHandler.WritableApiaryID)
 		r.Get("/{apiaryID}", apiaryHandler.Get)
 		r.Put("/{apiaryID}", apiaryHandler.Update)
 		r.Delete("/{apiaryID}", apiaryHandler.Delete)
