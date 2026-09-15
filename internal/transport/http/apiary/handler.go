@@ -167,7 +167,7 @@ func parseSortOrder(r *http.Request, fields map[string]string) (*string, map[str
 	return &s, fields
 }
 
-// Get handles GET /apiaries/{apiaryID}.
+// Get handles GET /apiaries/{apiaryId}.
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	userID, token, ok := h.requireAuth(w, r)
 	if !ok {
@@ -208,7 +208,7 @@ func (h *Handler) WritableApiaryID(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, WritableApiaryResponse{Unrestricted: unrestricted, ApiaryID: id})
 }
 
-// Update handles PUT /apiaries/{apiaryID}.
+// Update handles PUT /apiaries/{apiaryId}.
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	userID, token, ok := h.requireAuth(w, r)
 	if !ok {
@@ -250,7 +250,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, newResponse(a, h.publicBaseURL))
 }
 
-// Delete handles DELETE /apiaries/{apiaryID}. It cascades: every hive
+// Delete handles DELETE /apiaries/{apiaryId}. It cascades: every hive
 // under the apiary (and, transitively, their inspections and media), and
 // every media item attached directly to the apiary, is deleted first,
 // then the apiary itself.
@@ -323,7 +323,7 @@ func (h *Handler) requireAuth(w http.ResponseWriter, r *http.Request) (uuid.UUID
 }
 
 func (h *Handler) pathApiaryID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
-	id, err := uuid.Parse(chi.URLParam(r, "apiaryID"))
+	id, err := uuid.Parse(chi.URLParam(r, "apiaryId"))
 	if err != nil {
 		httpx.WriteError(w, http.StatusBadRequest, CodeInvalidApiaryID, "apiary id must be a valid UUID")
 		return uuid.Nil, false

@@ -79,7 +79,7 @@ func (r *CreateRequest) Validate() map[string]string {
 	return fields
 }
 
-// UpdateRequest is the body of PUT /apiaries/{apiaryID}. Update replaces
+// UpdateRequest is the body of PUT /apiaries/{apiaryId}. Update replaces
 // all fields (PUT semantics), not a partial patch, so the same rules apply
 // as on create.
 type UpdateRequest struct {
