@@ -24,11 +24,16 @@ type Service struct {
 	hives         HiveClient
 	media         MediaClient
 	subscriptions EntitlementResolver
+	reminders     EntityCleanup
 }
 
 // NewService constructs a Service.
-func NewService(apiaries apiary.Repository, hives HiveClient, media MediaClient, subscriptions EntitlementResolver) *Service {
-	return &Service{apiaries: apiaries, hives: hives, media: media, subscriptions: subscriptions}
+func NewService(apiaries apiary.Repository, hives HiveClient, media MediaClient, subscriptions EntitlementResolver, extras ...EntityCleanup) *Service {
+	s := &Service{apiaries: apiaries, hives: hives, media: media, subscriptions: subscriptions}
+	if len(extras) > 0 {
+		s.reminders = extras[0]
+	}
+	return s
 }
 
 // Create creates a new apiary owned by userID. If in.Images is non-empty,
@@ -340,12 +345,27 @@ func (s *Service) DeleteAllByUser(ctx context.Context, userID uuid.UUID, accessT
 	return nil
 }
 
+func (s *Service) DeleteLocalByUser(ctx context.Context, userID uuid.UUID) error {
+	r, ok := s.apiaries.(interface {
+		DeleteAllByUserHard(context.Context, uuid.UUID) error
+	})
+	if !ok {
+		return fmt.Errorf("apiary: repository does not support account cleanup")
+	}
+	return r.DeleteAllByUserHard(ctx, userID)
+}
+
 func (s *Service) deleteCascade(ctx context.Context, userID uuid.UUID, accessToken string, a *apiary.Apiary) error {
 	if err := s.hives.DeleteByApiary(ctx, accessToken, a.ID); err != nil {
 		return err
 	}
 	if len(a.Images) > 0 {
 		if err := s.media.DeleteByIDs(ctx, accessToken, a.Images); err != nil {
+			return err
+		}
+	}
+	if s.reminders != nil {
+		if err := s.reminders.Cleanup(ctx, "apiary", a.ID); err != nil {
 			return err
 		}
 	}

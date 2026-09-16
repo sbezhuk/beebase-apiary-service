@@ -253,7 +253,7 @@ func (r *ApiaryRepository) ListAllByUser(ctx context.Context, userID uuid.UUID) 
 	const q = `
 		SELECT id, user_id, name, location, description, lat, lon, images, created_at, updated_at, deleted_at
 		FROM apiaries
-		WHERE user_id = $1 AND deleted_at IS NULL
+		WHERE user_id = $1
 		ORDER BY created_at ASC, id ASC
 	`
 
@@ -363,4 +363,12 @@ func (r *ApiaryRepository) HardDelete(ctx context.Context, userID, apiaryID uuid
 	}
 
 	return nil
+}
+
+// DeleteAllByUserHard is the account-deletion primitive. It is deliberately
+// idempotent and includes rows already soft-deleted; descendant services and
+// media-service are swept independently by the account workflow.
+func (r *ApiaryRepository) DeleteAllByUserHard(ctx context.Context, userID uuid.UUID) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM apiaries WHERE user_id = $1`, userID)
+	return err
 }

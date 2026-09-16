@@ -40,6 +40,10 @@ type MediaClient interface {
 	DeleteByIDs(ctx context.Context, accessToken string, ids []uuid.UUID) error
 }
 
+type EntityCleanup interface {
+	Cleanup(ctx context.Context, entityType string, entityID uuid.UUID) error
+}
+
 // Entitlement values returned by subscription-service.
 const (
 	EntitlementFree = "free"

@@ -14,6 +14,7 @@ import (
 
 	apiaryhttp "github.com/sbezhuk/beebase-apiary-service/internal/transport/http/apiary"
 	httpmw "github.com/sbezhuk/beebase-common/authmw"
+	"github.com/sbezhuk/beebase-common/httpx"
 	"github.com/sbezhuk/beebase-common/internalauth"
 )
 
@@ -39,6 +40,18 @@ func NewRouter(
 	r.Get("/health", HealthHandler)
 	r.Get("/ready", ReadyHandler(db))
 	r.With(internalauth.RequireAuth(internalToken)).Get("/internal/api/v1/apiaries/{id}/exists", existsHandler(db, "apiaries", true))
+	r.With(internalauth.RequireAuth(internalToken)).Delete("/internal/api/v1/users/{userID}", func(w http.ResponseWriter, req *http.Request) {
+		id, err := uuid.Parse(chi.URLParam(req, "userID"))
+		if err != nil {
+			httpx.WriteError(w, 400, "invalid_user_id", "invalid user id")
+			return
+		}
+		if err := apiaryHandler.DeleteUserData(req.Context(), id); err != nil {
+			httpx.WriteError(w, 500, "cleanup_failed", "could not delete apiary data")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	r.Route("/api/v1/apiaries", func(r chi.Router) {
 		r.Use(httpmw.RequireAuth(tokenParser))
