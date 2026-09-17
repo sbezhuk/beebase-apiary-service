@@ -81,7 +81,13 @@ is never used as a fallback, in development or in production.
 | `HTTP_SHUTDOWN_TIMEOUT`     | `15s`                        | Max time to wait for graceful shutdown    |
 | `DATABASE_URL`              | *(required)*                 | PostgreSQL DSN                            |
 | `DATABASE_CONNECT_TIMEOUT`  | `5s`                         | Timeout for the initial DB connection      |
+| `REDIS_ADDR`                | *(required)*                 | Shared Redis session store for token revocation checks |
+| `REDIS_CONNECT_TIMEOUT`     | `5s`                         | Timeout for the initial Redis connection   |
 | `AUTH_JWKS_URL`             | *(required)*                 | auth-service's public key endpoint, used to verify access tokens |
+| `INTERNAL_SERVICE_TOKEN`    | *(required)*                 | Credential for authenticated internal cleanup and existence calls |
+| `HIVE_SERVICE_URL`          | *(required)*                 | hive-service base URL used for apiary deletion cascades |
+| `MEDIA_SERVICE_URL`         | *(required)*                 | media-service base URL used for apiary-owned media cleanup |
+| `SUBSCRIPTION_SERVICE_URL`  | *(required)*                 | subscription-service base URL used for entitlement and quota checks |
 | `PUBLIC_BASE_URL`           | *(required)*                 | Gateway's externally reachable base URL, used to build each image's `image_url` |
 | `TEST_DATABASE_URL`         | *(unset)*                    | Used only by `make test-integration`, never by the app |
 
@@ -114,9 +120,9 @@ apiary — get, update, delete — scopes its SQL by `user_id` as well as
 `id`, so there is no code path that can read or write another user's
 apiary: a request for someone else's apiary returns the exact same
 `404 apiary_not_found` as a request for an apiary that doesn't exist at
-all, never a `403`, so existence can't be probed either. Deletes are
-soft (`deleted_at` is set, the row is retained) per the project's
-offline-sync plan — apiaries are a synchronizable entity.
+all, never a `403`, so existence can't be probed either. Deletes are hard
+deletes: the service cascades to the apiary's hives and directly attached
+media before removing the apiary row.
 
 ## Development
 
