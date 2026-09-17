@@ -304,10 +304,10 @@ paths:
     delete:
       tags: [apiaries]
       summary: Delete an apiary
-      description: Soft delete — the row is retained (deleted_at is set) for future sync support.
+      description: Hard delete after cascading deletion of the apiary's hives, inspections, reminders, and attached media.
       responses:
         "204":
-          description: The apiary is deleted (or already was).
+          description: The apiary and its descendants are deleted.
         "400":
           description: apiaryId is not a valid UUID.
           content:
